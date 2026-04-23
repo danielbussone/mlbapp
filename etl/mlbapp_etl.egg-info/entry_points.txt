@@ -1,0 +1,3 @@
+[console_scripts]
+mlbapp-chadwick-etl = mlbapp_etl.chadwick:main
+mlbapp-fg-etl = mlbapp_etl.fg:main

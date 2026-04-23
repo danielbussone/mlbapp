@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlbapp-etl"
+version = "0.1.0"
+description = "FanGraphs, Statcast, Chadwick register, and related ingest for mlbapp Postgres"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.1",
+  "psycopg[binary]>=3.1",
+  "pybaseball>=2.2",
+  "requests>=2.28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+mlbapp-fg-etl = "mlbapp_etl.fg:main"
+mlbapp-chadwick-etl = "mlbapp_etl.chadwick:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mlbapp_etl*"]

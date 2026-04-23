@@ -1,0 +1,82 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: mlbapp
+      POSTGRES_PASSWORD: mlbapp
+      POSTGRES_DB: mlbapp
+    # Host 5433 avoids clashing with another Postgres on localhost:5432 (Homebrew, other stacks).
+    ports:
+      - "5433:5432"
+    volumes:
+      - mlbapp_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlbapp -d mlbapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - mlbapp_ollama:/root/.ollama
+    # Uncomment on Linux + NVIDIA for GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  flyway:
+    image: flyway/flyway:10-alpine
+    profiles:
+      - tools
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./db/sql:/flyway/sql:ro
+    environment:
+      FLYWAY_URL: jdbc:postgresql://db:5432/mlbapp
+      FLYWAY_USER: mlbapp
+      FLYWAY_PASSWORD: mlbapp
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+    command: migrate
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    profiles:
+      - full
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      DATABASE_URL: postgresql://mlbapp:mlbapp@db:5432/mlbapp
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    profiles:
+      - full
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  mlbapp_pg:
+  mlbapp_ollama:

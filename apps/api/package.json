@@ -1,0 +1,30 @@
+{
+  "name": "@mlbapp/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@mlbapp/shared": "workspace:*",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1",
+    "undici": "^6.21.0",
+    "zod": "^3.24.1"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.2"
+  }
+}
