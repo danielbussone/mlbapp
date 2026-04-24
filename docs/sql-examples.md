@@ -431,6 +431,45 @@ See [PLAYER_CARDS_REQUIREMENTS.md](./PLAYER_CARDS_REQUIREMENTS.md) §10.
 
 ---
 
+## Statcast: `payload_jsonb` keys (V2 pitch mix / movement overlays)
+
+Typed columns on `statcast_pitch` are limited to the set in [`V2__domain_schema.sql`](../db/sql/V2__domain_schema.sql) and `_TYPED_SAVANT_COLS` in [`etl/mlbapp_etl/statcast.py`](../etl/mlbapp_etl/statcast.py). **All other Savant CSV columns** land in `payload_jsonb` under their **original names**.
+
+**Commonly present (pybaseball Statcast search) — use for extended mix and release overlays:**
+
+| Key | Use |
+|-----|-----|
+| `zone` | Strike-zone grid (1–9 in-zone; 11–14 chase band); drives zone% / chase% |
+| `type` | Pitch result code (`B`, `S`, `X`, …); optional swing inference |
+| `description` | Text outcome (`swinging_strike`, `called_strike`, `hit_into_play`, …); whiff% / swing flags |
+| `bb_type` | Batted-ball type (`ground_ball`, `fly_ball`, `line_drive`, `popup`, …) when BIP |
+| `release_pos_x`, `release_pos_z` | Release position (feet); arm-angle / release plot |
+| `release_extension` | Extension (feet) |
+| `release_spin_rate`, `spin_axis` | Spin (rpm) and axis |
+| `stand`, `p_throws` | Batter / pitcher handedness for cohorts |
+
+**Audit on your database** (key frequency on a recent partition):
+
+```sql
+SELECT k, COUNT(*) AS rows_with_key
+FROM statcast_pitch s,
+     LATERAL jsonb_object_keys(s.payload_jsonb) AS t(k)
+WHERE s.game_year = 2024
+GROUP BY k
+ORDER BY rows_with_key DESC
+LIMIT 80;
+```
+
+**Refresh league movement MV** (after large Statcast ingest):
+
+```sql
+REFRESH MATERIALIZED VIEW statcast_league_pitch_movement_rollup;
+```
+
+See materialized view [`V14__statcast_league_movement_fg_fielding_oaa.sql`](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql).
+
+---
+
 ## Statcast: recent ingest snapshots
 
 Sources are fixed in [STATCAST_REQUIREMENTS.md](./STATCAST_REQUIREMENTS.md) §7.

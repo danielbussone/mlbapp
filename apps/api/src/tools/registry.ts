@@ -1,7 +1,8 @@
 import type pg from 'pg';
 import { comparePlayersCareer, stripComparePayloadForLlm } from '../repos/comparePlayers.js';
+import { compareStatcastSummary } from '../repos/compareStatcastSummary.js';
 import { getFgSeasonLines } from '../repos/fangraphsSeason.js';
-import { resolvePlayer } from '../repos/players.js';
+import { resolvePlayer, resolvePlayerIdFromQuery } from '../repos/players.js';
 import {
   statcastBatterBattedBall,
   statcastPitcherPitchMix,
@@ -13,6 +14,7 @@ import {
   getFgSeasonLineArgsSchema,
   resolvePlayerArgsSchema,
   statcastBatterBattedBallArgsSchema,
+  statcastCompareStatcastArgsSchema,
   statcastPitcherPitchMixArgsSchema,
   statcastSampleRowsArgsSchema,
 } from './schemas.js';
@@ -136,6 +138,24 @@ export const ollamaToolDefinitions: unknown[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'statcast_compare_statcast_summary',
+      description:
+        'Compare Statcast panels for two players resolved by name in one game_year (pitch mix + sample for pitchers; batted ball + bat path + sample for batters). Prefer after resolve_player when MLBAMs are unknown.',
+      parameters: {
+        type: 'object',
+        required: ['player_a_query', 'player_b_query', 'game_year'],
+        properties: {
+          player_a_query: { type: 'string' },
+          player_b_query: { type: 'string' },
+          game_year: { type: 'integer' },
+          role: { type: 'string', enum: ['pitcher', 'batter'] },
+        },
+      },
+    },
+  },
 ];
 
 export async function executeTool(
@@ -240,6 +260,21 @@ export async function executeTool(
         limit: p.data.limit ?? null,
       });
       return { rows };
+    }
+    case 'statcast_compare_statcast_summary': {
+      const p = statcastCompareStatcastArgsSchema.safeParse(args);
+      if (!p.success) return { error: 'invalid_args', details: p.error.flatten() };
+      const ra = await resolvePlayerIdFromQuery(pool, p.data.player_a_query.trim());
+      if ('error' in ra) return { error: ra.error, stage: 'resolve_a' };
+      const rb = await resolvePlayerIdFromQuery(pool, p.data.player_b_query.trim());
+      if ('error' in rb) return { error: rb.error, stage: 'resolve_b' };
+      const role = p.data.role ?? 'pitcher';
+      return compareStatcastSummary(pool, {
+        player_ids: [ra.player_id, rb.player_id],
+        role,
+        game_year: p.data.game_year,
+        enhanced: true,
+      });
     }
     default:
       return { error: 'unknown_tool', name };

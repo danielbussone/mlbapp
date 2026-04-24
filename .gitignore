@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+logs/chat-tool-traces/
+.DS_Store
+coverage
+docs/samples/*.csv
+docs/samples/*.parquet
+.pybaseball-cache
+.venv-etl
+etl/.venv

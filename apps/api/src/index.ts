@@ -29,6 +29,10 @@ app.addHook('onClose', async () => {
 
 try {
   await app.listen({ port, host: '0.0.0.0' });
+  app.log.info(
+    { port, cwd: process.cwd() },
+    'mlbapp-api listening (Vite /api proxy targets this port; cwd should be apps/api in the repo you are editing)'
+  );
 } catch (err) {
   app.log.error(err);
   process.exit(1);

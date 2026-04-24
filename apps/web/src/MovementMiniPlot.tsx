@@ -58,9 +58,33 @@ function num(v: unknown): number | null {
 
 /**
  * Induced movement from Savant `pfx_x` / `pfx_z` (stored as **feet** in `statcast_pitch`).
- * Horizontal axis uses **pitcher's perspective** (−pfx_x in feet, then ×12 → inches for plotting).
+ * Horizontal axis: **−pfx_x** (inches) for pitcher-perspective charts; league averages should use the
+ * same handedness cohort (`statcastLeagueMovementByYear(..., 'L'|'R')`) so hollow markers line up with dots.
  */
-export function MovementMiniPlot({ rows }: { rows: Array<Record<string, unknown>> }) {
+export type LeagueMovementRow = {
+  pitch_type: string;
+  avg_pfx_x_ft: number;
+  avg_pfx_z_ft: number;
+};
+
+export type ArmAngleOverlay = {
+  /** Mean direction in x–z release plane (degrees); used for overlay line only. */
+  meanDeg: number;
+  /** Approximate spread (degrees) for wedge. */
+  stdDeg: number;
+};
+
+export function MovementMiniPlot({
+  rows,
+  leagueMovement,
+  armAngle,
+}: {
+  rows: Array<Record<string, unknown>>;
+  /** League-average pfx per pitch type (feet); draws open circles behind pitch dots. */
+  leagueMovement?: LeagueMovementRow[] | null;
+  /** Optional arm-slot direction overlay from release_pos_x/z sample. */
+  armAngle?: ArmAngleOverlay | null;
+}) {
   const clipUid = useId().replace(/:/g, '');
   const pts = useMemo(() => {
     const out: Point[] = [];
@@ -74,6 +98,27 @@ export function MovementMiniPlot({ rows }: { rows: Array<Record<string, unknown>
     }
     return out;
   }, [rows]);
+
+  const leaguePts = useMemo(() => {
+    if (!leagueMovement?.length) return [] as { x: number; y: number; pitchType: string }[];
+    return leagueMovement.map((lm) => {
+      const x = -Number(lm.avg_pfx_x_ft) * PFX_FT_TO_IN;
+      const y = Number(lm.avg_pfx_z_ft) * PFX_FT_TO_IN;
+      return { x, y, pitchType: String(lm.pitch_type ?? '') };
+    });
+  }, [leagueMovement]);
+
+  const armWedge = useMemo(() => {
+    if (armAngle == null || !Number.isFinite(armAngle.meanDeg)) return null;
+    const L = 16;
+    const m = (armAngle.meanDeg * Math.PI) / 180;
+    const spread = ((armAngle.stdDeg && armAngle.stdDeg > 0 ? armAngle.stdDeg : 6) * Math.PI) / 180;
+    const x1 = Math.cos(m - spread) * L;
+    const y1 = Math.sin(m - spread) * L;
+    const x2 = Math.cos(m + spread) * L;
+    const y2 = Math.sin(m + spread) * L;
+    return { x1, y1, x2, y2, xm: Math.cos(m) * L, ym: Math.sin(m) * L };
+  }, [armAngle]);
 
   const bounds = useMemo(
     () => ({
@@ -172,6 +217,9 @@ export function MovementMiniPlot({ rows }: { rows: Array<Record<string, unknown>
             <clipPath id={clipUid}>
               <rect x={0} y={0} width={vb} height={vb} />
             </clipPath>
+            <pattern id={`${clipUid}-hash`} patternUnits="userSpaceOnUse" width={3} height={3}>
+              <path d="M0,3 L3,0 M-1,1 L2,-2" stroke="#757575" strokeWidth={0.35} />
+            </pattern>
           </defs>
           <rect x={0} y={0} width={vb} height={vb} fill="#fafafa" stroke="#e0e0e0" />
           <g clipPath={`url(#${clipUid})`}>
@@ -212,6 +260,36 @@ export function MovementMiniPlot({ rows }: { rows: Array<Record<string, unknown>
               strokeDasharray="2 1.5"
               opacity={0.95}
             />
+            {armWedge && (
+              <path
+                d={`M ${cx0} ${cy0} L ${toSvgX(armWedge.x1)} ${toSvgY(armWedge.y1)} L ${toSvgX(armWedge.x2)} ${toSvgY(armWedge.y2)} Z`}
+                fill="rgba(66, 66, 66, 0.12)"
+                stroke="#424242"
+                strokeWidth={0.35}
+              />
+            )}
+            {armWedge && (
+              <line
+                x1={cx0}
+                y1={cy0}
+                x2={toSvgX(armWedge.xm)}
+                y2={toSvgY(armWedge.ym)}
+                stroke="#212121"
+                strokeWidth={0.55}
+              />
+            )}
+            {leaguePts.map((p, i) => (
+              <circle
+                key={`lg-${i}`}
+                cx={toSvgX(p.x)}
+                cy={toSvgY(p.y)}
+                r={2.1}
+                fill={`url(#${clipUid}-hash)`}
+                stroke={colorForType(p.pitchType)}
+                strokeWidth={0.4}
+                opacity={0.95}
+              />
+            ))}
             {pts.map((p, i) => (
               <circle
                 key={i}

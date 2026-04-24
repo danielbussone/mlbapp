@@ -4,6 +4,8 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { App } from './App.js';
+import { CompareCareerPage } from './CompareCareerPage.js';
+import { CompareStatcastPage } from './CompareStatcastPage.js';
 import { PlayerCardPage } from './PlayerCardPage.js';
 import { PlayerCardWireframePreview } from './PlayerCardWireframePreview.js';
 import { PlayerMlbamRedirect } from './PlayerMlbamRedirect.js';
@@ -27,6 +29,8 @@ createRoot(document.getElementById('root')!).render(
           )}
           <Route path="/players/mlbam/:mlbam" element={<PlayerMlbamRedirect />} />
           <Route path="/players/:playerId" element={<PlayerCardPage />} />
+          <Route path="/compare/career" element={<CompareCareerPage />} />
+          <Route path="/compare/statcast" element={<CompareStatcastPage />} />
           <Route path="/" element={<App />} />
         </Routes>
       </BrowserRouter>

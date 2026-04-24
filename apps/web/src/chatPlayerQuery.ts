@@ -47,6 +47,41 @@ export type PlayerCardChatIntent = {
   explicitSeason: number | null;
 };
 
+export type CompareChatIntent = {
+  playerAQuery: string;
+  playerBQuery: string;
+  explicitSeason: number | null;
+  /** `statcast` when the message asks about pitch mix / swings / Statcast; otherwise FanGraphs career-style compare. */
+  mode: 'career' | 'statcast';
+};
+
+/**
+ * Two-player compare from chat (e.g. “Compare Mike Trout and Ken Griffey Jr.”).
+ * Prefer this over {@link extractPlayerCardChatIntent} when both patterns could match.
+ */
+export function extractCompareChatIntent(message: string): CompareChatIntent | null {
+  const m = message.trim();
+  if (!m) return null;
+  const andMatch =
+    m.match(/compare\s+(.+?)\s+and\s+(.+?)(?:[.?!]|$)/i) ||
+    m.match(/how\s+do\s+(.+?)\s+and\s+(.+?)\s+differ/i);
+  if (!andMatch?.[1] || !andMatch[2]) return null;
+  const a = andMatch[1].replace(/[?.!]+$/g, '').trim();
+  const b = andMatch[2].replace(/[?.!]+$/g, '').trim();
+  if (!a || !b || a.length > 200 || b.length > 200) return null;
+  const explicitSeason = extractExplicitSeasonYearFromMessage(m);
+  const low = m.toLowerCase();
+  const mode: CompareChatIntent['mode'] =
+    low.includes('pitch mix') ||
+    low.includes('swing') ||
+    low.includes('statcast') ||
+    low.includes('velo') ||
+    low.includes('movement')
+      ? 'statcast'
+      : 'career';
+  return { playerAQuery: a, playerBQuery: b, explicitSeason, mode };
+}
+
 const INLINE_YEAR_PATTERNS: Array<{ re: RegExp; nameIdx: number; yearIdx: number }> = [
   { re: /what\s+was\s+(.+?)\s+like\s+in\s+(19\d{2}|20\d{2})\b/i, nameIdx: 1, yearIdx: 2 },
   { re: /how\s+did\s+(.+?)\s+do\s+in\s+(19\d{2}|20\d{2})\b/i, nameIdx: 1, yearIdx: 2 },
@@ -69,6 +104,8 @@ const BIO_PATTERNS = [
 export function extractPlayerCardChatIntent(message: string): PlayerCardChatIntent | null {
   const m = message.trim();
   if (!m) return null;
+
+  if (extractCompareChatIntent(m) != null) return null;
 
   for (const { re, nameIdx, yearIdx } of INLINE_YEAR_PATTERNS) {
     const x = m.match(re);

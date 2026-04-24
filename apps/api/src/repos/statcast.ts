@@ -53,6 +53,210 @@ export async function statcastPitcherPitchMix(
   return rowsToJson(rows as Record<string, unknown>[]);
 }
 
+/**
+ * Pitch-type row with process rates (V2). Denominators:
+ * - zone_pct, chase_pct: use **known** `payload_jsonb.zone` (numeric 1–14) in the numerator/denominator as defined in SQL.
+ * - whiff_pct: swinging strikes ÷ **swings** on this pitch type (fouls count as swings).
+ * - swstr_pct: swinging strikes ÷ **all pitches** of this type (includes takes; always ≤ whiff_pct when swings ≤ pitches).
+ * - gb_pct, fb_pct, hr_pct: among **batted-ball events** (`launch_speed` IS NOT NULL) for that pitch type.
+ */
+export async function statcastPitcherPitchMixExtended(
+  pool: pg.Pool,
+  pitcher_mlbam: number,
+  game_year: number
+): Promise<Record<string, unknown>[]> {
+  const y = clampYear(game_year);
+  const { rows } = await pool.query(
+    `
+    WITH p AS (
+      SELECT
+        pitch_type,
+        release_speed,
+        description,
+        events,
+        launch_speed,
+        launch_angle,
+        NULLIF(TRIM(payload_jsonb->>'zone'), '')::numeric AS zone_num,
+        LOWER(TRIM(COALESCE(payload_jsonb->>'bb_type', ''))) AS bb_type_l,
+        (description IN (
+          'swinging_strike', 'swinging_strike_blocked', 'foul', 'foul_tip',
+          'hit_into_play', 'hit_into_play_no_out', 'hit_into_play_score',
+          'foul_bunt', 'missed_bunt', 'bunt_foul_tip'
+        )) AS is_swing,
+        (description IN ('swinging_strike', 'swinging_strike_blocked')) AS is_whiff,
+        (NULLIF(TRIM(payload_jsonb->>'zone'), '')::numeric IS NOT NULL
+          AND NULLIF(TRIM(payload_jsonb->>'zone'), '')::numeric BETWEEN 1 AND 9) AS in_zone,
+        (NULLIF(TRIM(payload_jsonb->>'zone'), '')::numeric IS NOT NULL
+          AND NOT (NULLIF(TRIM(payload_jsonb->>'zone'), '')::numeric BETWEEN 1 AND 9)) AS out_zone,
+        (launch_speed IS NOT NULL) AS is_bip,
+        (LOWER(COALESCE(events, '')) LIKE '%home_run%') AS is_hr,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(payload_jsonb->>'bb_type', ''))) = 'ground_ball' THEN TRUE
+          WHEN payload_jsonb->>'bb_type' IS NULL AND launch_speed IS NOT NULL AND launch_angle IS NOT NULL
+            AND launch_angle::double precision <= 10 THEN TRUE
+          ELSE FALSE
+        END AS is_gb,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(payload_jsonb->>'bb_type', ''))) IN ('fly_ball', 'popup') THEN TRUE
+          WHEN payload_jsonb->>'bb_type' IS NULL AND launch_speed IS NOT NULL AND launch_angle IS NOT NULL
+            AND launch_angle::double precision >= 25 THEN TRUE
+          ELSE FALSE
+        END AS is_fb
+      FROM statcast_pitch
+      WHERE game_year = $1
+        AND pitcher_mlbam = $2
+        AND pitch_type IS NOT NULL
+        AND TRIM(pitch_type) <> ''
+    )
+    SELECT
+      pitch_type,
+      COUNT(*)::bigint AS pitches,
+      ROUND((100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0))::numeric, 1) AS pct,
+      ROUND(AVG(release_speed)::numeric, 1) AS avg_velo,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE zone_num IS NOT NULL AND in_zone) /
+        NULLIF(COUNT(*) FILTER (WHERE zone_num IS NOT NULL), 0))::numeric, 1) AS zone_pct,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE zone_num IS NOT NULL AND out_zone AND is_swing) /
+        NULLIF(COUNT(*) FILTER (WHERE zone_num IS NOT NULL AND out_zone), 0))::numeric, 1) AS chase_pct,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE is_whiff) /
+        NULLIF(COUNT(*) FILTER (WHERE is_swing), 0))::numeric, 1) AS whiff_pct,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE is_whiff) / NULLIF(COUNT(*), 0))::numeric, 1) AS swstr_pct,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE is_bip AND is_gb) /
+        NULLIF(COUNT(*) FILTER (WHERE is_bip), 0))::numeric, 1) AS gb_pct,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE is_bip AND is_fb) /
+        NULLIF(COUNT(*) FILTER (WHERE is_bip), 0))::numeric, 1) AS fb_pct,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE is_bip AND is_hr) /
+        NULLIF(COUNT(*) FILTER (WHERE is_bip), 0))::numeric, 1) AS hr_pct
+    FROM p
+    GROUP BY pitch_type
+    ORDER BY pitches DESC
+    `,
+    [y, pitcher_mlbam]
+  );
+  return rowsToJson(rows as Record<string, unknown>[]);
+}
+
+/** Binned velocity histogram per pitch type (1 mph bins from lo to hi). */
+export async function statcastPitcherVeloHistogram(
+  pool: pg.Pool,
+  pitcher_mlbam: number,
+  game_year: number,
+  mphLo = 60,
+  mphHi = 105
+): Promise<Record<string, unknown>[]> {
+  const y = clampYear(game_year);
+  const { rows } = await pool.query(
+    `
+    WITH p AS (
+      SELECT
+        pitch_type,
+        FLOOR(release_speed::double precision)::int AS mph_floor
+      FROM statcast_pitch
+      WHERE game_year = $1
+        AND pitcher_mlbam = $2
+        AND pitch_type IS NOT NULL
+        AND release_speed IS NOT NULL
+        AND release_speed::double precision >= $3::double precision
+        AND release_speed::double precision < ($4::double precision + 1)
+    )
+    SELECT
+      pitch_type,
+      mph_floor,
+      COUNT(*)::bigint AS bin_count
+    FROM p
+    GROUP BY pitch_type, mph_floor
+    ORDER BY pitch_type, mph_floor
+    `,
+    [y, pitcher_mlbam, mphLo, mphHi]
+  );
+  return rowsToJson(rows as Record<string, unknown>[]);
+}
+
+/** Dominant `p_throws` from Statcast rows (payload_jsonb) for pitcher-perspective movement charts. */
+export async function statcastPitcherThrowsHand(
+  pool: pg.Pool,
+  pitcher_mlbam: number,
+  game_year: number
+): Promise<'L' | 'R' | null> {
+  const y = clampYear(game_year);
+  const { rows } = await pool.query(
+    `
+    SELECT NULLIF(TRIM(payload_jsonb->>'p_throws'), '') AS th,
+           COUNT(*)::bigint AS c
+    FROM statcast_pitch
+    WHERE game_year = $1
+      AND pitcher_mlbam = $2
+      AND NULLIF(TRIM(payload_jsonb->>'p_throws'), '') IN ('L', 'R')
+    GROUP BY 1
+    ORDER BY c DESC
+    LIMIT 1
+    `,
+    [y, pitcher_mlbam]
+  );
+  const t = String((rows[0] as { th?: string } | undefined)?.th ?? '')
+    .trim()
+    .toUpperCase();
+  if (t === 'L') return 'L';
+  if (t === 'R') return 'R';
+  return null;
+}
+
+/**
+ * League-average pfx by pitch type. When `p_throws_hand` is `'L'` or `'R'`, aggregates only that
+ * handedness (matches individual pitcher movement in catcher-frame `pfx_x`). Otherwise uses the
+ * pre-aggregated MV (all pitchers combined).
+ */
+export async function statcastLeagueMovementByYear(
+  pool: pg.Pool,
+  game_year: number,
+  p_throws_hand: 'L' | 'R' | null = null
+): Promise<Record<string, unknown>[]> {
+  const y = clampYear(game_year);
+  if (p_throws_hand === 'L' || p_throws_hand === 'R') {
+    try {
+      const { rows } = await pool.query(
+        `
+        SELECT
+          $1::smallint AS game_year,
+          pitch_type,
+          COUNT(*)::bigint AS pitches,
+          ROUND(AVG(pfx_x::double precision)::numeric, 4) AS avg_pfx_x_ft,
+          ROUND(AVG(pfx_z::double precision)::numeric, 4) AS avg_pfx_z_ft,
+          ROUND(STDDEV_SAMP(pfx_x::double precision)::numeric, 4) AS std_pfx_x_ft,
+          ROUND(STDDEV_SAMP(pfx_z::double precision)::numeric, 4) AS std_pfx_z_ft
+        FROM statcast_pitch
+        WHERE game_year = $1
+          AND pitch_type IS NOT NULL
+          AND TRIM(pitch_type) <> ''
+          AND pfx_x IS NOT NULL
+          AND pfx_z IS NOT NULL
+          AND NULLIF(TRIM(payload_jsonb->>'p_throws'), '') = $2
+        GROUP BY pitch_type
+        ORDER BY pitches DESC
+        `,
+        [y, p_throws_hand]
+      );
+      return rowsToJson(rows as Record<string, unknown>[]);
+    } catch {
+      return [];
+    }
+  }
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT game_year, pitch_type, pitches,
+             avg_pfx_x_ft, avg_pfx_z_ft, std_pfx_x_ft, std_pfx_z_ft
+      FROM statcast_league_pitch_movement_rollup
+      WHERE game_year = $1
+      ORDER BY pitches DESC
+      `,
+      [y]
+    );
+    return rowsToJson(rows as Record<string, unknown>[]);
+  } catch {
+    return [];
+  }
+}
+
 export async function statcastBatterBattedBall(
   pool: pg.Pool,
   batter_mlbam: number,
@@ -158,6 +362,66 @@ export async function statcastBatterBatPathSummary(
   return rowToJson((rows[0] ?? {}) as Record<string, unknown>);
 }
 
+/** One row per (game_year, pitch_type) with usage % for season-trend charts. */
+export async function statcastPitcherMixByYearRange(
+  pool: pg.Pool,
+  pitcher_mlbam: number,
+  yearFrom: number,
+  yearTo: number
+): Promise<Record<string, unknown>[]> {
+  const y0 = clampYear(yearFrom);
+  const y1 = clampYear(yearTo);
+  const lo = Math.min(y0, y1);
+  const hi = Math.max(y0, y1);
+  const { rows } = await pool.query(
+    `
+    WITH c AS (
+      SELECT
+        game_year,
+        pitch_type,
+        COUNT(*)::bigint AS pitches
+      FROM statcast_pitch
+      WHERE pitcher_mlbam = $1
+        AND game_year BETWEEN $2 AND $3
+        AND pitch_type IS NOT NULL
+        AND TRIM(pitch_type) <> ''
+      GROUP BY game_year, pitch_type
+    )
+    SELECT
+      game_year,
+      pitch_type,
+      pitches,
+      ROUND((100.0 * pitches / NULLIF(SUM(pitches) OVER (PARTITION BY game_year), 0))::numeric, 1) AS pct
+    FROM c
+    ORDER BY game_year, pitches DESC
+    `,
+    [pitcher_mlbam, lo, hi]
+  );
+  return rowsToJson(rows as Record<string, unknown>[]);
+}
+
+/** Per-season bat-path summary for trend charts (one query per year; league recomputed each year). */
+export async function statcastBatterBatPathTimeseries(
+  pool: pg.Pool,
+  batter_mlbam: number,
+  yearFrom: number,
+  yearTo: number
+): Promise<Record<string, unknown>[]> {
+  const y0 = clampYear(yearFrom);
+  const y1 = clampYear(yearTo);
+  const lo = Math.min(y0, y1);
+  const hi = Math.max(y0, y1);
+  const years: number[] = [];
+  for (let y = lo; y <= hi; y += 1) years.push(y);
+  const rows = await Promise.all(
+    years.map(async (gy) => {
+      const summary = await statcastBatterBatPathSummary(pool, batter_mlbam, gy);
+      return { game_year: gy, ...summary };
+    })
+  );
+  return rows;
+}
+
 /**
  * True when the assembled statcast-summary payload has anything the player card can render
  * (pitch mix, movement sample, batted-ball row, spray/BIP sample, or bat-tracking aggregates).
@@ -167,12 +431,32 @@ export async function statcastBatterBatPathSummary(
 export function statcastSummaryHasRenderableData(
   role: 'pitcher' | 'batter',
   payload: Record<string, unknown>,
-  want: { mix: boolean; battedBall: boolean; sample: boolean; batPath: boolean }
+  want: {
+    mix: boolean;
+    battedBall: boolean;
+    sample: boolean;
+    batPath: boolean;
+    mixExtended?: boolean;
+    veloDist?: boolean;
+    leagueMovement?: boolean;
+  }
 ): boolean {
   if (role === 'pitcher') {
     if (want.mix) {
       const mix = payload.mix;
       if (Array.isArray(mix) && mix.length > 0) return true;
+    }
+    if (want.mixExtended) {
+      const mx = payload.mix_extended;
+      if (Array.isArray(mx) && mx.length > 0) return true;
+    }
+    if (want.veloDist) {
+      const v = payload.velo_dist;
+      if (Array.isArray(v) && v.length > 0) return true;
+    }
+    if (want.leagueMovement) {
+      const lm = payload.league_movement;
+      if (Array.isArray(lm) && lm.length > 0) return true;
     }
     if (want.sample) {
       const sample = payload.sample;
@@ -214,7 +498,13 @@ export async function statcastSampleRows(
     input.role === 'pitcher'
       ? `
     SELECT game_pk, at_bat_number, pitch_number, game_date, pitch_type,
-           release_speed, pfx_x, pfx_z, launch_speed, launch_angle, events, description
+           release_speed, pfx_x, pfx_z, launch_speed, launch_angle, events, description,
+           NULLIF(TRIM(payload_jsonb->>'zone'), '') AS zone,
+           NULLIF(TRIM(payload_jsonb->>'arm_angle'), '')::double precision AS arm_angle,
+           NULLIF(TRIM(payload_jsonb->>'release_pos_x'), '')::double precision AS release_pos_x,
+           NULLIF(TRIM(payload_jsonb->>'release_pos_z'), '')::double precision AS release_pos_z,
+           NULLIF(TRIM(payload_jsonb->>'release_extension'), '')::double precision AS release_extension,
+           NULLIF(TRIM(payload_jsonb->>'spin_axis'), '')::double precision AS spin_axis
     FROM statcast_pitch
     WHERE game_year = $1
       AND pitcher_mlbam = $2

@@ -11,8 +11,9 @@ import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState } from 'react';
 import { healthResponseSchema } from '@mlbapp/shared';
 import { getDefaultCardSeasonYear } from './cardSeasonYear.js';
-import { extractPlayerCardChatIntent } from './chatPlayerQuery.js';
+import { extractCompareChatIntent, extractPlayerCardChatIntent } from './chatPlayerQuery.js';
 import { PlayerCardPanel } from './PlayerCardPanel.js';
+import { PlayerCompareSidebar } from './PlayerCompareSidebar.js';
 import { consumeSse } from './sse.js';
 
 type ChatRole = 'user' | 'assistant';
@@ -24,7 +25,7 @@ interface ChatLine {
 
 export function App() {
   const [apiOk, setApiOk] = useState<boolean | null>(null);
-  const [input, setInput] = useState('Compare Mike Trout and Ken Griffey Jr.');
+  const [input, setInput] = useState('');
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +33,10 @@ export function App() {
   const [sidebarPlayerId, setSidebarPlayerId] = useState<number | null>(null);
   const [sidebarExplicitSeason, setSidebarExplicitSeason] = useState<number | null>(null);
   const [sidebarResolveError, setSidebarResolveError] = useState<string | null>(null);
+  /** Two-player compare sidebar (FanGraphs career or Statcast). */
+  const [compareIds, setCompareIds] = useState<[number, number] | null>(null);
+  const [compareMode, setCompareMode] = useState<'career' | 'statcast'>('career');
+  const [compareYear, setCompareYear] = useState(() => getDefaultCardSeasonYear());
 
   useEffect(() => {
     void (async () => {
@@ -50,41 +55,78 @@ export function App() {
     const msg = input.trim();
     if (!msg || streaming) return;
     setError(null);
-    const cardIntent = extractPlayerCardChatIntent(msg);
-    if (!cardIntent) {
+    const cmp = extractCompareChatIntent(msg);
+    if (cmp) {
       setSidebarPlayerId(null);
       setSidebarExplicitSeason(null);
-      setSidebarResolveError(null);
-    } else {
+      setCompareIds(null);
       setSidebarResolveError(null);
       void (async () => {
         try {
-          const q = new URLSearchParams({ name_query: cardIntent.nameQuery });
-          const r = await fetch(`/api/players/named?${q.toString()}`);
-          const j: unknown = await r.json().catch(() => null);
-          const rec = j && typeof j === 'object' ? (j as Record<string, unknown>) : {};
-          const pid = rec.player_id;
-          if (r.ok && typeof pid === 'number' && Number.isFinite(pid)) {
-            setSidebarPlayerId(Math.trunc(pid));
-            setSidebarExplicitSeason(cardIntent.explicitSeason);
-            setSidebarResolveError(null);
-          } else {
-            setSidebarPlayerId(null);
-            setSidebarExplicitSeason(null);
+          const resolveName = async (nameQuery: string) => {
+            const q = new URLSearchParams({ name_query: nameQuery });
+            const r = await fetch(`/api/players/named?${q.toString()}`);
+            const j: unknown = await r.json().catch(() => null);
+            const rec = j && typeof j === 'object' ? (j as Record<string, unknown>) : {};
+            const pid = rec.player_id;
+            if (r.ok && typeof pid === 'number' && Number.isFinite(pid)) return Math.trunc(pid);
             const err =
               typeof rec.error === 'string'
                 ? rec.error
                 : !r.ok
                   ? `Player lookup failed (${r.status})`
                   : 'Player lookup failed';
-            setSidebarResolveError(err);
-          }
-        } catch {
-          setSidebarPlayerId(null);
-          setSidebarExplicitSeason(null);
-          setSidebarResolveError('Player lookup failed (network)');
+            throw new Error(err);
+          };
+          const a = await resolveName(cmp.playerAQuery);
+          const b = await resolveName(cmp.playerBQuery);
+          setCompareMode(cmp.mode);
+          setCompareYear(cmp.explicitSeason ?? getDefaultCardSeasonYear());
+          setCompareIds([a, b]);
+          setSidebarResolveError(null);
+        } catch (e) {
+          setCompareIds(null);
+          setSidebarResolveError(e instanceof Error ? e.message : 'Compare lookup failed');
         }
       })();
+    } else {
+      setCompareIds(null);
+      const cardIntent = extractPlayerCardChatIntent(msg);
+      if (!cardIntent) {
+        setSidebarPlayerId(null);
+        setSidebarExplicitSeason(null);
+        setSidebarResolveError(null);
+      } else {
+        setSidebarResolveError(null);
+        void (async () => {
+          try {
+            const q = new URLSearchParams({ name_query: cardIntent.nameQuery });
+            const r = await fetch(`/api/players/named?${q.toString()}`);
+            const j: unknown = await r.json().catch(() => null);
+            const rec = j && typeof j === 'object' ? (j as Record<string, unknown>) : {};
+            const pid = rec.player_id;
+            if (r.ok && typeof pid === 'number' && Number.isFinite(pid)) {
+              setSidebarPlayerId(Math.trunc(pid));
+              setSidebarExplicitSeason(cardIntent.explicitSeason);
+              setSidebarResolveError(null);
+            } else {
+              setSidebarPlayerId(null);
+              setSidebarExplicitSeason(null);
+              const err =
+                typeof rec.error === 'string'
+                  ? rec.error
+                  : !r.ok
+                    ? `Player lookup failed (${r.status})`
+                    : 'Player lookup failed';
+              setSidebarResolveError(err);
+            }
+          } catch {
+            setSidebarPlayerId(null);
+            setSidebarExplicitSeason(null);
+            setSidebarResolveError('Player lookup failed (network)');
+          }
+        })();
+      }
     }
 
     setLines((prev) => [...prev, { role: 'user', text: msg }]);
@@ -131,7 +173,7 @@ export function App() {
     sidebarExplicitSeason ?? getDefaultCardSeasonYear();
 
   return (
-    <Container maxWidth={sidebarPlayerId != null ? false : 'md'} sx={{ py: 4 }}>
+    <Container maxWidth={sidebarPlayerId != null || compareIds != null ? false : 'md'} sx={{ py: 4 }}>
       <Typography variant="h4" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
         mlbapp
       </Typography>
@@ -215,7 +257,29 @@ export function App() {
           </Typography>
         </Box>
 
-        {sidebarPlayerId != null && (
+        {compareIds != null && (
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              width: '100%',
+              position: { lg: 'sticky' },
+              top: { lg: 16 },
+              alignSelf: 'stretch',
+            }}
+          >
+            <PlayerCompareSidebar
+              playerIds={compareIds}
+              mode={compareMode}
+              gameYear={compareYear}
+              onClose={() => {
+                setCompareIds(null);
+                setSidebarResolveError(null);
+              }}
+            />
+          </Box>
+        )}
+        {sidebarPlayerId != null && compareIds == null && (
           <Box
             sx={{
               flex: 1,

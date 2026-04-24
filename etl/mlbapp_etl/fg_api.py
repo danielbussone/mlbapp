@@ -7,6 +7,8 @@ import re
 import time
 from typing import Any, Literal
 
+FgStatsKind = Literal["bat", "pit", "fld"]
+
 import pandas as pd
 import requests
 
@@ -82,8 +84,15 @@ def _inclusive_year_chunks(lo: int, hi: int, max_years: int) -> list[tuple[int, 
     return out
 
 
+def _fg_leaderboard_type_for_stats(stats: FgStatsKind) -> int:
+    """FanGraphs ``type`` query param varies by leaderboard tab (batting=8, fielding=1)."""
+    if stats == "fld":
+        return 1
+    return 8
+
+
 def _fetch_fg_leaderboard_json_single_span(
-    stats: Literal["bat", "pit"],
+    stats: FgStatsKind,
     start_season: int,
     end_season: int,
     *,
@@ -120,10 +129,10 @@ def _fetch_fg_leaderboard_json_single_span(
             "ind": 1,
             "rost": 0,
             "players": "",
-            "type": 8,
             "postseason": "",
             "sortdir": "default",
             "sortstat": "WAR",
+            "type": _fg_leaderboard_type_for_stats(stats),
         }
         resp = requests.get(
             FG_MAJORS_LEADERS_URL,
@@ -147,7 +156,7 @@ def _fetch_fg_leaderboard_json_single_span(
 
 
 def fetch_fg_leaderboard_json(
-    stats: Literal["bat", "pit"],
+    stats: FgStatsKind,
     start_season: int,
     end_season: int,
     *,
@@ -227,4 +236,23 @@ def normalize_api_pitching_df(df: pd.DataFrame) -> pd.DataFrame:
     out["Level"] = "MLB"
     if "vFA" not in out.columns and "FBv" in out.columns:
         out["vFA"] = out["FBv"]
+    return out
+
+
+def normalize_api_fielding_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Alias-only normalization for FanGraphs fielding leaderboard rows."""
+    if df.empty:
+        return df
+    out = df.copy()
+    if "playerid" in out.columns:
+        out["IDfg"] = out["playerid"]
+    if "TeamNameAbb" in out.columns:
+        out["Team"] = out["TeamNameAbb"].astype(str)
+    elif "Team" in out.columns:
+        out["Team"] = out["Team"].map(lambda x: _strip_html_team(x) or "UNKNOWN")
+    else:
+        out["Team"] = "UNKNOWN"
+    out["Level"] = "MLB"
+    if "Pos" not in out.columns and "position" in out.columns:
+        out["Pos"] = out["position"]
     return out

@@ -21,6 +21,7 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
@@ -37,7 +38,12 @@ import {
   normalizeFgCardPayload,
 } from './batterFgTables.js';
 import { CARD_SEASON_YEAR_MAX, getDefaultCardSeasonYear } from './cardSeasonYear.js';
-import { MovementMiniPlot, pitchTypeMovementColor } from './MovementMiniPlot.js';
+import {
+  MovementMiniPlot,
+  pitchTypeMovementColor,
+  type ArmAngleOverlay,
+  type LeagueMovementRow,
+} from './MovementMiniPlot.js';
 import { pitchTypeName } from './pitchTypeLabels.js';
 import {
   PitchingCardTable,
@@ -58,8 +64,173 @@ import { BatPathSummary, type BatPathApiRow } from './BatPathSummary.js';
 import { inferPrimaryCardRole } from './playerCardPrimaryRole.js';
 import { fetchFgRoleHint } from './playerFgRoleHint.js';
 import { SprayChart } from './SprayChart.js';
+import { BatSpeedSeasonSpark } from './BatSpeedSeasonSpark.js';
+import { FieldingTable } from './FieldingTable.js';
+import { OaaHeatmapPlaceholder } from './OaaHeatmapPlaceholder.js';
+import { PitchMixVeloTable } from './PitchMixVeloTable.js';
 
 export type CardRole = 'batting' | 'pitching';
+
+const ARM_ANGLE_MIN_SAMPLE = 8;
+
+/** OLS on pitcher-season aggregates (nz≥80): arm ≈ b0 + b1·|release_x| + b2·release_z (feet). */
+const ARM_ANGLE_REG_INTERCEPT = -54.6857;
+const ARM_ANGLE_REG_COEF_ABS_X = -4.2083;
+const ARM_ANGLE_REG_COEF_Z = 17.5145;
+const ARM_ANGLE_REG_CLIP_MIN = 0;
+const ARM_ANGLE_REG_CLIP_MAX = 95;
+
+/**
+ * Arm-slot overlay for `MovementMiniPlot`:
+ * 1. Prefer Statcast **`arm_angle`** when ≥`ARM_ANGLE_MIN_SAMPLE` pitches have a **non-zero** value (pre-2020 often `0`).
+ * 2. Else **regression** on `release_pos_x` / `release_pos_z` (feet): `b0 + b1·|x| + b2·z` fit on league pitcher-seasons.
+ * 3. LHP: mirror measured/estimated Savant degrees with **`180 − θ`** before mapping to the plot.
+ */
+function computeArmOverlay(
+  rows: Record<string, unknown>[] | undefined,
+  throwsLeft: boolean
+): ArmAngleOverlay | null {
+  if (!rows?.length) return null;
+
+  const armAngles: number[] = [];
+  for (const r of rows) {
+    const a = typeof r.arm_angle === 'number' ? r.arm_angle : Number(r.arm_angle);
+    if (!Number.isFinite(a) || Math.abs(a) < 1e-6) continue;
+    armAngles.push(a);
+  }
+  if (armAngles.length >= ARM_ANGLE_MIN_SAMPLE) {
+    const mean = armAngles.reduce((x, y) => x + y, 0) / armAngles.length;
+    const v =
+      armAngles.reduce((s, a) => s + (a - mean) ** 2, 0) / Math.max(1, armAngles.length - 1);
+    const meanPlot = throwsLeft ? 180 - mean : mean;
+    return { meanDeg: meanPlot, stdDeg: Math.sqrt(v) };
+  }
+
+  const estArms: number[] = [];
+  for (const r of rows) {
+    const x = typeof r.release_pos_x === 'number' ? r.release_pos_x : Number(r.release_pos_x);
+    const z = typeof r.release_pos_z === 'number' ? r.release_pos_z : Number(r.release_pos_z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    estArms.push(
+      ARM_ANGLE_REG_INTERCEPT +
+        ARM_ANGLE_REG_COEF_ABS_X * Math.abs(x) +
+        ARM_ANGLE_REG_COEF_Z * z
+    );
+  }
+  if (estArms.length < ARM_ANGLE_MIN_SAMPLE) return null;
+  const meanEst = estArms.reduce((a, b) => a + b, 0) / estArms.length;
+  const vEst =
+    estArms.reduce((s, a) => s + (a - meanEst) ** 2, 0) / Math.max(1, estArms.length - 1);
+  const meanSavant = Math.min(
+    ARM_ANGLE_REG_CLIP_MAX,
+    Math.max(ARM_ANGLE_REG_CLIP_MIN, meanEst)
+  );
+  const meanPlot = throwsLeft ? 180 - meanSavant : meanSavant;
+  return { meanDeg: meanPlot, stdDeg: Math.sqrt(vEst) };
+}
+
+function leagueMovementFromPayload(raw: unknown): LeagueMovementRow[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: LeagueMovementRow[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue;
+    const o = r as Record<string, unknown>;
+    const pt = String(o.pitch_type ?? '');
+    const ax = Number(o.avg_pfx_x_ft);
+    const az = Number(o.avg_pfx_z_ft);
+    if (!pt || !Number.isFinite(ax) || !Number.isFinite(az)) continue;
+    out.push({ pitch_type: pt, avg_pfx_x_ft: ax, avg_pfx_z_ft: az });
+  }
+  return out.length ? out : null;
+}
+
+function normPitchCode(s: string): string {
+  return s.trim().toUpperCase();
+}
+
+/** Usage % from `mix` / `mix_extended` row (`pct` is 0–100 from API). */
+function mixUsagePct(row: Record<string, unknown>): number {
+  const raw = row.pct;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const n = Number.parseFloat(raw.trim().replace(/%$/, ''));
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+const PITCH_CARD_MIN_USAGE_PCT = 1;
+
+/** Drop pitch types below `minPct` usage; if that removes everything, keep original rows. */
+function filterMixRowsMinPct(
+  rows: Record<string, unknown>[] | undefined,
+  minPct: number
+): Record<string, unknown>[] {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const f = rows.filter((r) => mixUsagePct(r) >= minPct);
+  return f.length > 0 ? f : rows;
+}
+
+/**
+ * Pitch types with usage ≥ `minPct` for league/movement overlays (prefer `mix_extended`, then `mix`,
+ * then any pitch type seen in `sample`).
+ */
+function pitchTypesAtLeastPctFromStatcast(
+  statcast: Record<string, unknown> | null,
+  minPct: number
+): Set<string> | null {
+  if (!statcast) return null;
+  const mixExt = statcast.mix_extended as Record<string, unknown>[] | undefined;
+  if (Array.isArray(mixExt) && mixExt.length > 0) {
+    const out = new Set<string>();
+    for (const r of mixExt) {
+      if (mixUsagePct(r) < minPct) continue;
+      const c = normPitchCode(String(r.pitch_type ?? ''));
+      if (c) out.add(c);
+    }
+    if (out.size) return out;
+  }
+  const mix = statcast.mix as Record<string, unknown>[] | undefined;
+  if (Array.isArray(mix) && mix.length > 0) {
+    const out = new Set<string>();
+    for (const r of mix) {
+      if (mixUsagePct(r) < minPct) continue;
+      const c = normPitchCode(String(r.pitch_type ?? ''));
+      if (c) out.add(c);
+    }
+    if (out.size) return out;
+  }
+  const sample = statcast.sample as Record<string, unknown>[] | undefined;
+  if (Array.isArray(sample) && sample.length > 0) {
+    const out = new Set<string>();
+    for (const r of sample) {
+      const c = normPitchCode(String(r.pitch_type ?? ''));
+      if (c) out.add(c);
+    }
+    return out.size ? out : null;
+  }
+  return null;
+}
+
+function filterMovementSampleByPitchTypes(
+  sample: Record<string, unknown>[] | undefined,
+  types: Set<string> | null
+): Record<string, unknown>[] {
+  if (!sample?.length) return [];
+  if (!types?.size) return sample;
+  const out = sample.filter((r) => types.has(normPitchCode(String(r.pitch_type ?? ''))));
+  return out.length > 0 ? out : sample;
+}
+
+function filterLeagueMovementForPitcher(
+  league: LeagueMovementRow[] | null,
+  pitcherTypes: Set<string> | null
+): LeagueMovementRow[] | null {
+  if (!league?.length) return league;
+  if (!pitcherTypes?.size) return league;
+  const filtered = league.filter((r) => pitcherTypes.has(normPitchCode(String(r.pitch_type ?? ''))));
+  return filtered.length > 0 ? filtered : league;
+}
 
 export type PlayerRow = {
   player_id: number;
@@ -201,9 +372,81 @@ export function PlayerCardPanel({
   const [statcast, setStatcast] = useState<Record<string, unknown> | null>(null);
   /** Desktop-only: narrow Statcast rail when Savant has nothing for this player/year. */
   const [statcastCollapsed, setStatcastCollapsed] = useState(false);
+  const [fieldingRows, setFieldingRows] = useState<Record<string, unknown>[]>([]);
 
   const battingCard = useMemo(() => battingCardLinesFromCareerViews(fgBattingCard), [fgBattingCard]);
   const pitchingCard = useMemo(() => pitchingCardLinesFromCareerViews(fgPitchingCard), [fgPitchingCard]);
+
+  const pitchingMixDisplay = useMemo(
+    () => filterMixRowsMinPct(statcast?.mix as Record<string, unknown>[] | undefined, PITCH_CARD_MIN_USAGE_PCT),
+    [statcast?.mix]
+  );
+  const pitchingMixExtendedDisplay = useMemo(
+    () =>
+      filterMixRowsMinPct(statcast?.mix_extended as Record<string, unknown>[] | undefined, PITCH_CARD_MIN_USAGE_PCT),
+    [statcast?.mix_extended]
+  );
+  const pitchingVeloDisplay = useMemo(() => {
+    const v = statcast?.velo_dist as Record<string, unknown>[] | undefined;
+    if (!Array.isArray(v) || !pitchingMixDisplay.length) return v;
+    const codes = new Set(pitchingMixDisplay.map((r) => normPitchCode(String(r.pitch_type ?? ''))));
+    const f = v.filter((row) => codes.has(normPitchCode(String(row.pitch_type ?? ''))));
+    return f.length > 0 ? f : v;
+  }, [statcast?.velo_dist, pitchingMixDisplay]);
+  const pitchTypesMovementFilter = useMemo(
+    () =>
+      role === 'pitching' ? pitchTypesAtLeastPctFromStatcast(statcast, PITCH_CARD_MIN_USAGE_PCT) : null,
+    [role, statcast]
+  );
+  const statcastSampleMovement = useMemo(() => {
+    const s = statcast?.sample as Record<string, unknown>[] | undefined;
+    if (role !== 'pitching' || !s?.length) return s;
+    return filterMovementSampleByPitchTypes(s, pitchTypesMovementFilter);
+  }, [role, statcast?.sample, pitchTypesMovementFilter]);
+
+  const throwsLeftPitcher = useMemo(
+    () => role === 'pitching' && String(statcast?.pitcher_throws ?? '').toUpperCase() === 'L',
+    [role, statcast?.pitcher_throws]
+  );
+
+  const armOverlay = useMemo(
+    () =>
+      computeArmOverlay(
+        (role === 'pitching' ? statcastSampleMovement : statcast?.sample) as Record<string, unknown>[] | undefined,
+        throwsLeftPitcher
+      ),
+    [role, statcast?.sample, statcastSampleMovement, throwsLeftPitcher]
+  );
+  const leagueMovement = useMemo(
+    () => leagueMovementFromPayload(statcast?.league_movement),
+    [statcast?.league_movement]
+  );
+  const leagueMovementForPlot = useMemo(
+    () =>
+      filterLeagueMovementForPitcher(
+        leagueMovement,
+        role === 'pitching' ? pitchTypesMovementFilter : null
+      ),
+    [leagueMovement, role, pitchTypesMovementFilter]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/players/${playerId}/fg-fielding?season=${season}`);
+        const j = (await r.json()) as { rows?: unknown };
+        if (cancelled) return;
+        if (r.ok && Array.isArray(j.rows)) setFieldingRows(j.rows as Record<string, unknown>[]);
+        else setFieldingRows([]);
+      } catch {
+        if (!cancelled) setFieldingRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId, season]);
 
   /** No Savant payload for this player/year → narrow the Statcast rail on desktop; otherwise use full column. */
   useEffect(() => {
@@ -590,6 +833,11 @@ export function PlayerCardPanel({
                   No FanGraphs pitching rows for this player.
                 </Typography>
               )}
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, mt: 2, mb: 0.5 }}>
+                Fielding (FanGraphs)
+              </Typography>
+              <FieldingTable rows={fieldingRows} />
+              <OaaHeatmapPlaceholder playerId={playerId} gameYear={season} />
             </Box>
             {collapseStatcastLayout ? (
               <Box
@@ -655,59 +903,150 @@ export function PlayerCardPanel({
                         <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                           Pitch Mix
                         </Typography>
-                        <Table size="small">
-                          <TableHead>
-                            <TableRow>
-                              <TableCell>Pitch</TableCell>
-                              <TableCell align="right">%</TableCell>
-                              <TableCell align="right">Velo</TableCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {Array.isArray(statcast.mix) &&
-                              (statcast.mix as Record<string, unknown>[]).map((row, i) => {
-                                const pt = String(row.pitch_type ?? '');
-                                return (
-                                  <TableRow key={i}>
-                                    <TableCell>
-                                      <Stack direction="row" alignItems="center" spacing={0.75}>
-                                        <Box
-                                          component="span"
-                                          sx={{
-                                            minWidth: 22,
-                                            width: 22,
-                                            height: 10,
-                                            borderRadius: 999,
-                                            bgcolor: pitchTypeMovementColor(pt),
-                                            flexShrink: 0,
-                                            border: '1px solid',
-                                            borderColor: 'divider',
-                                          }}
-                                        />
-                                        <Stack spacing={0} sx={{ minWidth: 0 }}>
-                                          <Typography component="span" variant="body2" noWrap>
-                                            {pitchTypeName(pt)}
-                                          </Typography>
-                                          <Typography
+                        {pitchingMixDisplay.length > 0 &&
+                          (Array.isArray(statcast.velo_dist) && (statcast.velo_dist as unknown[]).length > 0 ? (
+                            <PitchMixVeloTable
+                              mix={pitchingMixDisplay}
+                              veloRows={(pitchingVeloDisplay ?? statcast.velo_dist) as Record<string, unknown>[]}
+                            />
+                          ) : (
+                            <Table size="small" sx={{ width: '100%', maxWidth: 420 }}>
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell>Pitch</TableCell>
+                                  <TableCell align="right">%</TableCell>
+                                  <TableCell align="right">Velo</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {pitchingMixDisplay.map((row, i) => {
+                                  const pt = String(row.pitch_type ?? '');
+                                  return (
+                                    <TableRow key={i}>
+                                      <TableCell>
+                                        <Stack direction="row" alignItems="center" spacing={0.75}>
+                                          <Box
                                             component="span"
-                                            variant="caption"
-                                            color="text.secondary"
-                                            sx={{ lineHeight: 1.1 }}
-                                          >
-                                            {pt}
-                                          </Typography>
+                                            sx={{
+                                              minWidth: 22,
+                                              width: 22,
+                                              height: 10,
+                                              borderRadius: 999,
+                                              bgcolor: pitchTypeMovementColor(pt),
+                                              flexShrink: 0,
+                                              border: '1px solid',
+                                              borderColor: 'divider',
+                                            }}
+                                          />
+                                          <Stack spacing={0} sx={{ minWidth: 0 }}>
+                                            <Typography component="span" variant="body2" noWrap>
+                                              {pitchTypeName(pt)}
+                                            </Typography>
+                                            <Typography
+                                              component="span"
+                                              variant="caption"
+                                              color="text.secondary"
+                                              sx={{ lineHeight: 1.1 }}
+                                            >
+                                              {pt}
+                                            </Typography>
+                                          </Stack>
                                         </Stack>
-                                      </Stack>
+                                      </TableCell>
+                                      <TableCell align="right">{String(row.pct ?? '')}</TableCell>
+                                      <TableCell align="right">{String(row.avg_velo ?? '')}</TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          ))}
+                        {pitchingMixExtendedDisplay.length > 0 && (
+                          <>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 600, mt: 1 }}>
+                              Pitch mix (rates)
+                            </Typography>
+                            <TableContainer sx={{ maxWidth: '100%', overflow: 'auto' }}>
+                              <Table size="small" sx={{ '& td, & th': { fontSize: '0.68rem', whiteSpace: 'nowrap' } }}>
+                                <TableHead>
+                                  <TableRow>
+                                    <TableCell>Pitch</TableCell>
+                                    <TableCell align="right">%</TableCell>
+                                    <TableCell align="right">Zone%</TableCell>
+                                    <TableCell align="right">Chase%</TableCell>
+                                    <TableCell align="right">
+                                      <Tooltip
+                                        title="Swinging strikes ÷ swings on this pitch type (fouls count as swings). Same as whiff-per-swing."
+                                        arrow
+                                        placement="top"
+                                      >
+                                        <Box component="span" sx={{ cursor: 'help', textDecoration: 'underline dotted' }}>
+                                          Whiff%
+                                        </Box>
+                                      </Tooltip>
                                     </TableCell>
-                                    <TableCell align="right">{String(row.pct ?? '')}</TableCell>
-                                    <TableCell align="right">{String(row.avg_velo ?? '')}</TableCell>
+                                    <TableCell align="right">
+                                      <Tooltip
+                                        title="Swinging strikes ÷ all pitches of this type (includes takes). Usually lower than Whiff% because the denominator is larger than swings-only."
+                                        arrow
+                                        placement="top"
+                                      >
+                                        <Box component="span" sx={{ cursor: 'help', textDecoration: 'underline dotted' }}>
+                                          SwStr%
+                                        </Box>
+                                      </Tooltip>
+                                    </TableCell>
+                                    <TableCell align="right">GB%</TableCell>
+                                    <TableCell align="right">FB%</TableCell>
+                                    <TableCell align="right">HR%</TableCell>
                                   </TableRow>
-                                );
-                              })}
-                          </TableBody>
-                        </Table>
-                        {Array.isArray(statcast.sample) && (
-                          <MovementMiniPlot rows={statcast.sample as Record<string, unknown>[]} />
+                                </TableHead>
+                                <TableBody>
+                                  {pitchingMixExtendedDisplay.map((row, i) => {
+                                    const pt = String(row.pitch_type ?? '');
+                                    return (
+                                      <TableRow key={i}>
+                                        <TableCell>
+                                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                            <Box
+                                              sx={{
+                                                width: 16,
+                                                height: 7,
+                                                borderRadius: 99,
+                                                bgcolor: pitchTypeMovementColor(pt),
+                                                border: 1,
+                                                borderColor: 'divider',
+                                              }}
+                                            />
+                                            {pitchTypeName(pt)}
+                                          </Box>
+                                        </TableCell>
+                                        <TableCell align="right">{String(row.pct ?? '')}</TableCell>
+                                        <TableCell align="right">{String(row.zone_pct ?? '—')}</TableCell>
+                                        <TableCell align="right">{String(row.chase_pct ?? '—')}</TableCell>
+                                        <TableCell align="right">{String(row.whiff_pct ?? '—')}</TableCell>
+                                        <TableCell align="right">{String(row.swstr_pct ?? '—')}</TableCell>
+                                        <TableCell align="right">{String(row.gb_pct ?? '—')}</TableCell>
+                                        <TableCell align="right">{String(row.fb_pct ?? '—')}</TableCell>
+                                        <TableCell align="right">{String(row.hr_pct ?? '—')}</TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </TableContainer>
+                          </>
+                        )}
+                        {Array.isArray(statcast.sample) && (statcast.sample as unknown[]).length > 0 && (
+                          <MovementMiniPlot
+                            rows={
+                              (role === 'pitching'
+                                ? (statcastSampleMovement ?? (statcast.sample as Record<string, unknown>[]))
+                                : (statcast.sample as Record<string, unknown>[])) as Record<string, unknown>[]
+                            }
+                            leagueMovement={leagueMovementForPlot ?? undefined}
+                            armAngle={armOverlay ?? undefined}
+                          />
                         )}
                       </Stack>
                     )}
@@ -721,6 +1060,7 @@ export function PlayerCardPanel({
                         {statcast.bat_path != null && typeof statcast.bat_path === 'object' && (
                           <BatPathSummary batPath={statcast.bat_path as BatPathApiRow} />
                         )}
+                        <BatSpeedSeasonSpark playerId={playerId} season={season} fromYear={season - 5} />
                         {Array.isArray(statcast.sample) && (
                           <SprayChart rows={statcast.sample as Record<string, unknown>[]} gameYear={season} />
                         )}

@@ -55,6 +55,7 @@ from mlbapp_etl.columns import (
 from mlbapp_etl.fg_api import (
     fetch_fg_leaderboard_json,
     normalize_api_batting_df,
+    normalize_api_fielding_df,
     normalize_api_pitching_df,
     throttle_between_fg_requests,
 )
@@ -128,6 +129,19 @@ def _fetch_pitching(
         "pit", start_season, end_season, league=league, qual=qual
     )
     return normalize_api_pitching_df(raw)
+
+
+def _fetch_fielding(
+    start_season: int,
+    end_season: int,
+    *,
+    league: str,
+    qual: int | None,
+) -> Any:
+    raw = fetch_fg_leaderboard_json(
+        "fld", start_season, end_season, league=league, qual=qual
+    )
+    return normalize_api_fielding_df(raw)
 
 
 def _batting_row(snapshot_id: uuid.UUID, row: Any) -> dict[str, Any]:
@@ -221,6 +235,42 @@ def _pitching_row(snapshot_id: uuid.UUID, row: Any) -> dict[str, Any]:
     }
 
 
+def _fielding_row(snapshot_id: uuid.UUID, row: Any) -> dict[str, Any]:
+    id_fg = as_int(pick(row, "IDfg"))
+    if id_fg is None:
+        msg = "missing IDfg in FanGraphs fielding row"
+        raise ValueError(msg)
+    season = as_smallint(pick(row, "Season"))
+    if season is None:
+        msg = "missing Season in FanGraphs fielding row"
+        raise ValueError(msg)
+    team = as_text(pick(row, "Team")) or "UNKNOWN"
+    level = as_text(pick(row, "Level")) or "MLB"
+    pos_raw = as_text(pick(row, "Pos")) or as_text(pick(row, "Position")) or "UNK"
+    position = (pos_raw or "UNK")[:64]
+    stats_jsonb = Json(row_to_stats_json(row))
+    return {
+        "snapshot_id": str(snapshot_id),
+        "id_fg": id_fg,
+        "season": season,
+        "team": team,
+        "level": level,
+        "position": position,
+        "age": as_smallint(pick(row, "Age")),
+        "games": as_smallint(pick(row, "G")),
+        "inn": as_numeric(pick(row, "Inn"), 1),
+        "po": as_int(pick(row, "PO")),
+        "assists": as_int(pick(row, "A")),
+        "errors": as_smallint(pick(row, "E")),
+        "drs": as_numeric(pick(row, "DRS"), 2),
+        "uzr": as_numeric(pick(row, "UZR"), 2),
+        "oaa": as_numeric(pick(row, "OAA"), 2),
+        "frv": as_numeric(pick(row, "FRV"), 2),
+        "war": as_numeric(pick(row, "WAR"), 2),
+        "stats_jsonb": stats_jsonb,
+    }
+
+
 _BAT_SQL = """
 INSERT INTO fg_batting_season (
   snapshot_id, id_fg, season, team, level, player_id,
@@ -252,6 +302,18 @@ INSERT INTO fg_pitching_season (
 )
 """
 
+_FLD_SQL = """
+INSERT INTO fg_fielding_season (
+  snapshot_id, id_fg, season, team, level, position, player_id,
+  age, games, inn, po, assists, errors, drs, uzr, oaa, frv, war,
+  stats_jsonb
+) VALUES (
+  %(snapshot_id)s::uuid, %(id_fg)s, %(season)s, %(team)s, %(level)s, %(position)s, NULL,
+  %(age)s, %(games)s, %(inn)s, %(po)s, %(assists)s, %(errors)s, %(drs)s, %(uzr)s, %(oaa)s, %(frv)s, %(war)s,
+  %(stats_jsonb)s
+)
+"""
+
 
 _LINK_BAT = """
 UPDATE fg_batting_season f
@@ -273,12 +335,24 @@ WHERE f.snapshot_id = %s
   AND f.player_id IS DISTINCT FROM m.player_id
 """
 
+_LINK_FLD = """
+UPDATE fg_fielding_season f
+SET player_id = m.player_id
+FROM player_external_identifier m
+WHERE f.snapshot_id = %s
+  AND m.id_system = 'fangraphs'
+  AND m.id_value = f.id_fg::text
+  AND f.player_id IS DISTINCT FROM m.player_id
+"""
+
 
 def _link_fg_table(cur: Any, table: str, snapshot_id: uuid.UUID) -> int:
     if table == "fg_batting_season":
         sql = _LINK_BAT
     elif table == "fg_pitching_season":
         sql = _LINK_PIT
+    elif table == "fg_fielding_season":
+        sql = _LINK_FLD
     else:
         msg = "invalid table for player link"
         raise ValueError(msg)
@@ -295,6 +369,7 @@ def run_fg_etl(
     qual: int | None,
     load_batting: bool,
     load_pitching: bool,
+    load_fielding: bool,
     dry_run: bool,
     link_players: bool,
     notes: str | None,
@@ -304,12 +379,17 @@ def run_fg_etl(
 
     bat_df = None
     pit_df = None
+    fld_df = None
     if load_batting:
         bat_df = _fetch_batting(start_season, end_season, league=league_arg, qual=qual)
     if load_pitching:
         if load_batting:
             throttle_between_fg_requests()
         pit_df = _fetch_pitching(start_season, end_season, league=league_arg, qual=qual)
+    if load_fielding:
+        if load_batting or load_pitching:
+            throttle_between_fg_requests()
+        fld_df = _fetch_fielding(start_season, end_season, league=league_arg, qual=qual)
 
     params_obj: dict[str, Any] = {
         "transport": "fangraphs_major_league_json_api",
@@ -327,6 +407,7 @@ def run_fg_etl(
                     "dry_run": True,
                     "batting_rows": 0 if bat_df is None else len(bat_df.index),
                     "pitching_rows": 0 if pit_df is None else len(pit_df.index),
+                    "fielding_rows": 0 if fld_df is None else len(fld_df.index),
                 },
                 indent=2,
             )
@@ -377,6 +458,26 @@ def run_fg_etl(
                 out.append(("fangraphs_pitching", sid))
                 if link_players:
                     linked["fangraphs_pitching"] = _link_fg_table(cur, "fg_pitching_season", sid)
+            if fld_df is not None:
+                sid = uuid.uuid4()
+                cur.execute(
+                    """
+                    INSERT INTO ingest_snapshot (snapshot_id, source, params, row_count, notes)
+                    VALUES (%s, %s, %s::jsonb, %s, %s)
+                    """,
+                    (
+                        str(sid),
+                        "fangraphs_fielding",
+                        json.dumps({**params_obj, "facet": "fielding"}),
+                        len(fld_df.index),
+                        notes,
+                    ),
+                )
+                for _, row in fld_df.iterrows():
+                    cur.execute(_FLD_SQL, _fielding_row(sid, row))
+                out.append(("fangraphs_fielding", sid))
+                if link_players:
+                    linked["fangraphs_fielding"] = _link_fg_table(cur, "fg_fielding_season", sid)
         conn.commit()
 
     summary: dict[str, Any] = {"snapshots": [{"source": s, "snapshot_id": str(i)} for s, i in out]}
@@ -432,6 +533,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--batting-only", action="store_true")
     parser.add_argument("--pitching-only", action="store_true")
+    parser.add_argument(
+        "--fielding-only",
+        action="store_true",
+        help="Load FanGraphs fielding leaderboard only (writes fg_fielding_season).",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--link-players",
@@ -450,10 +556,11 @@ def main(argv: list[str] | None = None) -> None:
     ns = parser.parse_args(argv)
 
     end_season = ns.end_season if ns.end_season is not None else ns.start_season
-    if ns.batting_only and ns.pitching_only:
-        parser.error("use at most one of --batting-only / --pitching-only")
-    load_batting = not ns.pitching_only
-    load_pitching = not ns.batting_only
+    if sum(1 for x in (ns.batting_only, ns.pitching_only, ns.fielding_only) if x) > 1:
+        parser.error("use at most one of --batting-only / --pitching-only / --fielding-only")
+    load_fielding = ns.fielding_only
+    load_batting = not ns.pitching_only and not ns.fielding_only
+    load_pitching = not ns.batting_only and not ns.fielding_only
 
     load_repo_dotenv(_repo_root())
     dsn = os.environ.get("DATABASE_URL")
@@ -474,6 +581,7 @@ def main(argv: list[str] | None = None) -> None:
             qual=None if ns.fangraphs_qualified_fetch else ns.qual,
             load_batting=load_batting,
             load_pitching=load_pitching,
+            load_fielding=load_fielding,
             dry_run=ns.dry_run,
             link_players=ns.link_players,
             notes=ns.notes,

@@ -95,7 +95,7 @@ function persistFullToolIo(
 const SYSTEM_PROMPT = `You are a baseball statistics assistant backed by database tools.
 
 Allowed tools (use these exact names only; never invent other tool names):
-resolve_player, get_fg_season_line, compare_players_career, statcast_pitcher_pitch_mix, statcast_batter_batted_ball, statcast_sample_rows.
+resolve_player, get_fg_season_line, compare_players_career, statcast_pitcher_pitch_mix, statcast_batter_batted_ball, statcast_sample_rows, statcast_compare_statcast_summary.
 
 Workflow:
 - FanGraphs season lines (WAR, slash, counting stats): call resolve_player if you need player_id, then call get_fg_season_line with player_id (integer from candidates), role batting or pitching, and season or season_from/season_to. Do not claim FanGraphs data is missing until get_fg_season_line has returned.

@@ -7,15 +7,25 @@ import {
   getFgRoleHintPayload,
 } from '../repos/fangraphsCareer.js';
 import { getFgSeasonLines, type FgRole } from '../repos/fangraphsSeason.js';
+import { compareFgCareer } from '../repos/compareFgCareer.js';
+import { compareStatcastSummary } from '../repos/compareStatcastSummary.js';
+import { getFgFieldingSeasonLines } from '../repos/fangraphsFielding.js';
 import { getPlayerById, resolvePlayer, resolvePlayerIdFromQuery } from '../repos/players.js';
 import {
   clampGameYear,
   statcastBatterBatPathSummary,
+  statcastBatterBatPathTimeseries,
   statcastBatterBattedBall,
+  statcastLeagueMovementByYear,
+  statcastPitcherMixByYearRange,
   statcastPitcherPitchMix,
+  statcastPitcherPitchMixExtended,
+  statcastPitcherVeloHistogram,
+  statcastPitcherThrowsHand,
   statcastSampleRows,
   statcastSummaryHasRenderableData,
 } from '../repos/statcast.js';
+import { statcastFieldingOaaCells } from '../repos/statcastFielding.js';
 
 const fgSeasonQuerySchema = z.object({
   role: z.enum(['batting', 'pitching']),
@@ -32,8 +42,49 @@ const fgSeasonQuerySchema = z.object({
 const statcastSummaryQuerySchema = z.object({
   role: z.enum(['pitcher', 'batter']),
   game_year: z.coerce.number().int(),
-  panel: z.enum(['mix', 'batted_ball', 'sample', 'bat_path']).optional(),
+  panel: z
+    .enum(['mix', 'batted_ball', 'sample', 'bat_path', 'mix_extended', 'velo_dist', 'league_movement'])
+    .optional(),
   limit: z.coerce.number().int().min(1).max(12_000).optional(),
+  /** When `1` (default), pitcher “all panels” includes mix_extended, velo_dist, league_movement. */
+  enhanced: z.enum(['0', '1']).optional(),
+});
+
+const comparePlayerIdsSchema = z.object({
+  player_ids: z
+    .string()
+    .min(1)
+    .transform((s: string) =>
+      s
+        .split(',')
+        .map((x: string) => Number.parseInt(x.trim(), 10))
+        .filter((n: number) => Number.isInteger(n) && n > 0)
+    )
+    .refine((arr: number[]) => arr.length >= 2 && arr.length <= 4, 'player_ids must list 2–4 distinct numeric ids'),
+});
+
+const compareStatcastQuerySchema = comparePlayerIdsSchema.extend({
+  role: z.enum(['pitcher', 'batter']),
+  game_year: z.coerce.number().int(),
+  enhanced: z.enum(['0', '1']).optional(),
+});
+
+const statcastTimeseriesQuerySchema = z.object({
+  role: z.enum(['pitcher', 'batter']),
+  metric: z.enum(['bat_path', 'pitch_mix']),
+  from: z.coerce.number().int().min(1900).max(2100),
+  to: z.coerce.number().int().min(1900).max(2100),
+});
+
+const fgFieldingQuerySchema = z.object({
+  season: z.coerce.number().int().optional(),
+  season_from: z.coerce.number().int().optional(),
+  season_to: z.coerce.number().int().optional(),
+  limit: z.coerce.number().int().min(1).max(60).optional(),
+});
+
+const fieldingOaaQuerySchema = z.object({
+  game_year: z.coerce.number().int(),
 });
 
 const fgBattingCardQuerySchema = z.object({
@@ -123,24 +174,54 @@ export function registerPlayersRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get('/players/:playerId', async (req: FastifyRequest, reply: FastifyReply) => {
+  app.get('/players/compare/fg-career', async (req: FastifyRequest, reply: FastifyReply) => {
     if (!hasDatabaseUrl()) {
       dbUnavailable(reply);
       return;
     }
-    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
-    if (playerId == null) {
-      reply.code(400).send({ error: 'Invalid playerId' });
+    const parsed = comparePlayerIdsSchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
       return;
     }
     try {
       const pool = getPool();
-      const row = await getPlayerById(pool, playerId);
-      if (!row) {
-        reply.code(404).send({ error: 'Player not found' });
+      const payload = await compareFgCareer(pool, { player_ids: parsed.data.player_ids });
+      if ('error' in payload) {
+        reply.code(400).send(payload);
         return;
       }
-      reply.send(row);
+      reply.send(payload);
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  app.get('/players/compare/statcast-summary', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const parsed = compareStatcastQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const enhanced = parsed.data.enhanced !== '0';
+      const payload = await compareStatcastSummary(pool, {
+        player_ids: parsed.data.player_ids,
+        role: parsed.data.role,
+        game_year: parsed.data.game_year,
+        enhanced,
+      });
+      if ('error' in payload) {
+        reply.code(400).send(payload);
+        return;
+      }
+      reply.send(payload);
     } catch (e) {
       req.log.error(e);
       reply.code(500).send({ error: 'Database error' });
@@ -322,6 +403,13 @@ export function registerPlayersRoutes(app: FastifyInstance) {
       reply.code(400).send({ error: 'panel=bat_path is only valid with role=batter' });
       return;
     }
+    const pitcherOnlyPanels = ['mix', 'mix_extended', 'velo_dist', 'league_movement'] as const;
+    for (const p of pitcherOnlyPanels) {
+      if (q.panel === p && q.role === 'batter') {
+        reply.code(400).send({ error: `panel=${p} is only valid with role=pitcher` });
+        return;
+      }
+    }
     try {
       const pool = getPool();
       const player = await getPlayerById(pool, playerId);
@@ -345,7 +433,12 @@ export function registerPlayersRoutes(app: FastifyInstance) {
       }
 
       const wantAll = q.panel == null;
+      const enhanced = q.enhanced !== '0';
       const wantMix = wantAll || q.panel === 'mix';
+      const wantBatchedMixExt = wantAll && enhanced;
+      const wantMixExt = wantBatchedMixExt || q.panel === 'mix_extended';
+      const wantVelo = wantBatchedMixExt || q.panel === 'velo_dist';
+      const wantLeagueMov = wantBatchedMixExt || q.panel === 'league_movement';
       const wantBatted = wantAll || q.panel === 'batted_ball';
       const wantSample = wantAll || q.panel === 'sample';
       const wantBatPath = wantAll || q.panel === 'bat_path';
@@ -359,8 +452,16 @@ export function registerPlayersRoutes(app: FastifyInstance) {
       };
 
       if (q.role === 'pitcher') {
-        const [mixRows, sampleRows] = await Promise.all([
+        const pitcherThrows = await statcastPitcherThrowsHand(pool, mlbam, effectiveYear);
+        if (pitcherThrows != null) out.pitcher_throws = pitcherThrows;
+
+        const [mixRows, mixExt, veloHist, leagueMov, sampleRows] = await Promise.all([
           wantMix ? statcastPitcherPitchMix(pool, mlbam, effectiveYear) : Promise.resolve(undefined),
+          wantMixExt ? statcastPitcherPitchMixExtended(pool, mlbam, effectiveYear) : Promise.resolve(undefined),
+          wantVelo ? statcastPitcherVeloHistogram(pool, mlbam, effectiveYear) : Promise.resolve(undefined),
+          wantLeagueMov
+            ? statcastLeagueMovementByYear(pool, effectiveYear, pitcherThrows)
+            : Promise.resolve(undefined),
           wantSample
             ? statcastSampleRows(pool, {
                 role: 'pitcher',
@@ -371,6 +472,9 @@ export function registerPlayersRoutes(app: FastifyInstance) {
             : Promise.resolve(undefined),
         ]);
         if (mixRows !== undefined) out.mix = mixRows;
+        if (mixExt !== undefined) out.mix_extended = mixExt;
+        if (veloHist !== undefined) out.velo_dist = veloHist;
+        if (leagueMov !== undefined) out.league_movement = leagueMov;
         if (sampleRows !== undefined) out.sample = sampleRows;
       } else {
         const [battedBall, batPath, sampleRows] = await Promise.all([
@@ -395,18 +499,180 @@ export function registerPlayersRoutes(app: FastifyInstance) {
         battedBall: wantBatted,
         sample: wantSample,
         batPath: wantBatPath,
+        mixExtended: wantMixExt,
+        veloDist: wantVelo,
+        leagueMovement: wantLeagueMov,
       });
       out.statcast_available = hasData;
       if (!hasData) {
         out.reason =
           'No Statcast-tracked pitches or batted balls in the database for this player in this season (typical for pre–Statcast careers or years with no ingest).';
         if (wantMix) delete out.mix;
+        if (wantMixExt) delete out.mix_extended;
+        if (wantVelo) delete out.velo_dist;
+        if (wantLeagueMov) delete out.league_movement;
         if (wantSample) delete out.sample;
+        delete out.pitcher_throws;
         if (wantBatted) delete out.batted_ball;
         if (wantBatPath) delete out.bat_path;
       }
 
       reply.send(out);
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  app.get('/players/:playerId/statcast-timeseries', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    const parsed = statcastTimeseriesQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const player = await getPlayerById(pool, playerId);
+      if (!player) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      const mlbam = player.key_mlbam;
+      if (mlbam == null || typeof mlbam !== 'number') {
+        reply.code(400).send({ error: 'Player has no key_mlbam' });
+        return;
+      }
+      const { role, metric, from, to } = parsed.data;
+      if (role === 'batter' && metric === 'pitch_mix') {
+        reply.code(400).send({ error: 'pitch_mix timeseries requires role=pitcher' });
+        return;
+      }
+      if (role === 'pitcher' && metric === 'bat_path') {
+        reply.code(400).send({ error: 'bat_path timeseries requires role=batter' });
+        return;
+      }
+      if (role === 'batter' && metric === 'bat_path') {
+        const rows = await statcastBatterBatPathTimeseries(pool, mlbam, from, to);
+        reply.send({ player_id: playerId, key_mlbam: mlbam, role, metric, from, to, rows });
+        return;
+      }
+      if (role === 'pitcher' && metric === 'pitch_mix') {
+        const rows = await statcastPitcherMixByYearRange(pool, mlbam, from, to);
+        reply.send({ player_id: playerId, key_mlbam: mlbam, role, metric, from, to, rows });
+        return;
+      }
+      reply.code(400).send({ error: 'metric/role combination not supported' });
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  app.get('/players/:playerId/fg-fielding', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    const parsed = fgFieldingQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const exists = await getPlayerById(pool, playerId);
+      if (!exists) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      const rows = await getFgFieldingSeasonLines(pool, {
+        player_id: playerId,
+        season: parsed.data.season ?? null,
+        season_from: parsed.data.season_from ?? null,
+        season_to: parsed.data.season_to ?? null,
+        limit: parsed.data.limit ?? null,
+      });
+      reply.send({ player_id: playerId, rows });
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  app.get('/players/:playerId/fielding-oaa', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    const parsed = fieldingOaaQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const player = await getPlayerById(pool, playerId);
+      if (!player) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      const mlbam = player.key_mlbam;
+      if (mlbam == null || typeof mlbam !== 'number') {
+        reply.code(400).send({ error: 'Player has no key_mlbam' });
+        return;
+      }
+      const cells = await statcastFieldingOaaCells(pool, mlbam, parsed.data.game_year);
+      reply.send({
+        player_id: playerId,
+        key_mlbam: mlbam,
+        game_year: parsed.data.game_year,
+        game_year_effective: clampGameYear(parsed.data.game_year),
+        cells,
+      });
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  /** Register after all `/players/:playerId/...` routes so the router prefers concrete paths. */
+  app.get('/players/:playerId', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const row = await getPlayerById(pool, playerId);
+      if (!row) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      reply.send(row);
     } catch (e) {
       req.log.error(e);
       reply.code(500).send({ error: 'Database error' });
