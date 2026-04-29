@@ -288,7 +288,8 @@ export function AttackAngleGraphic({
   const refX = ox - refLen;
   const refY = oy;
   const hasPlayer = playerDeg != null;
-  const p = playerDeg ?? 0;
+  /** Only consumed when `hasPlayer`; dummy avoids trig when headline already shows "—". */
+  const p = hasPlayer ? playerDeg : 0;
   const px = ox + arrowLen * Math.cos(toRad(p));
   const py = oy - arrowLen * Math.sin(toRad(p));
   const wedge = hasPlayer ? `M ${ox} ${oy} L ${refX} ${refY} L ${px} ${py} Z` : '';
@@ -431,7 +432,11 @@ export function AttackDirectionGraphic({
   batterStand?: unknown;
 }) {
   const theme = useTheme();
-  const p = Math.max(-45, Math.min(45, playerDeg ?? 0));
+  /** Clamp only when a value exists; `0` here would conflate missing with true 0°. */
+  const p =
+    playerDeg != null && Number.isFinite(Number(playerDeg))
+      ? Math.max(-45, Math.min(45, playerDeg))
+      : 0;
   /**
    * Bat direction in the top-down plane: `theta` from Statcast sign (+ = pull → −y after `yB` squash).
    * Bat segment: box midpoint `hx,hy` toward far plate edge; ball arrow perpendicular from plate centerline `cx`.

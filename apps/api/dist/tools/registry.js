@@ -1,9 +1,10 @@
-import { comparePlayersCareer } from '../repos/comparePlayers.js';
+import { comparePlayersCareer, stripComparePayloadForLlm } from '../repos/comparePlayers.js';
+import { compareStatcastSummary } from '../repos/compareStatcastSummary.js';
 import { getFgSeasonLines } from '../repos/fangraphsSeason.js';
-import { resolvePlayer } from '../repos/players.js';
+import { resolvePlayer, resolvePlayerIdFromQuery } from '../repos/players.js';
 import { statcastBatterBattedBall, statcastPitcherPitchMix, statcastSampleRows, } from '../repos/statcast.js';
 import { enrichToolArgs, parseArgs } from './argEnrichment.js';
-import { comparePlayersCareerArgsSchema, getFgSeasonLineArgsSchema, resolvePlayerArgsSchema, statcastBatterBattedBallArgsSchema, statcastPitcherPitchMixArgsSchema, statcastSampleRowsArgsSchema, } from './schemas.js';
+import { comparePlayersCareerArgsSchema, getFgSeasonLineArgsSchema, resolvePlayerArgsSchema, statcastBatterBattedBallArgsSchema, statcastCompareStatcastArgsSchema, statcastPitcherPitchMixArgsSchema, statcastSampleRowsArgsSchema, } from './schemas.js';
 /** Ollama `/api/chat` `tools` array (JSON-schema functions). */
 export const ollamaToolDefinitions = [
     {
@@ -29,7 +30,7 @@ export const ollamaToolDefinitions = [
         type: 'function',
         function: {
             name: 'get_fg_season_line',
-            description: 'FanGraphs season lines from fg_batting_season_current or fg_pitching_season_current (deduped by latest ingest). Required: player_id from resolve_player, role batting|pitching. Optional: season (one year), or season_from+season_to, team, level. Rows include rate_stat_qualified (MLB rate-stat bar at ingest), war, avg, obp, slg, pa, hr, stats_jsonb, etc.',
+            description: 'FanGraphs season lines from fg_batting_season_current or fg_pitching_season_current (deduped by latest ingest). Required: player_id from resolve_player, role batting|pitching. Optional: season (one year), or season_from+season_to, team, level. Omit season/season_from/season_to unless the user asked for a specific year — otherwise you get the most recent rows (ordered by season). Rows include rate_stat_qualified, war, avg, obp, slg, pa, hr, stats_jsonb, etc.',
             parameters: {
                 type: 'object',
                 required: ['player_id', 'role'],
@@ -53,7 +54,7 @@ export const ollamaToolDefinitions = [
         type: 'function',
         function: {
             name: 'compare_players_career',
-            description: 'Compare two players: resolves each name query to exactly one dim_player, then returns merged FanGraphs batting and pitching season rows for both (same payload shape as separate get_fg calls).',
+            description: 'Compare two players: resolves each name query to exactly one dim_player, then returns merged FanGraphs batting and pitching season rows for both (same payload shape as separate get_fg calls). After it returns, summarize the comparison in natural language from those rows; do not answer with code to parse the JSON.',
             parameters: {
                 type: 'object',
                 required: ['player_a_query', 'player_b_query'],
@@ -111,6 +112,23 @@ export const ollamaToolDefinitions = [
                     mlbam: { type: 'integer' },
                     game_year: { type: 'integer' },
                     limit: { type: 'integer' },
+                },
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'statcast_compare_statcast_summary',
+            description: 'Compare Statcast panels for two players resolved by name in one game_year (pitch mix + sample for pitchers; batted ball + bat path + sample for batters). Prefer after resolve_player when MLBAMs are unknown.',
+            parameters: {
+                type: 'object',
+                required: ['player_a_query', 'player_b_query', 'game_year'],
+                properties: {
+                    player_a_query: { type: 'string' },
+                    player_b_query: { type: 'string' },
+                    game_year: { type: 'integer' },
+                    role: { type: 'string', enum: ['pitcher', 'batter'] },
                 },
             },
         },
@@ -179,7 +197,7 @@ export async function executeTool(pool, name, rawArgs, ctx) {
                     hint: 'include_batting / include_pitching accept booleans or strings "true"/"false". season_from / season_to accept integers or digit-only year strings; omit or use 0 for full career. Years outside 1900–2032 are clamped.',
                 };
             }
-            return comparePlayersCareer(pool, {
+            const raw = await comparePlayersCareer(pool, {
                 player_a_query: p.data.player_a_query,
                 player_b_query: p.data.player_b_query,
                 include_batting: p.data.include_batting ?? null,
@@ -187,6 +205,7 @@ export async function executeTool(pool, name, rawArgs, ctx) {
                 season_from: p.data.season_from ?? null,
                 season_to: p.data.season_to ?? null,
             });
+            return stripComparePayloadForLlm(raw);
         }
         case 'statcast_pitcher_pitch_mix': {
             const p = statcastPitcherPitchMixArgsSchema.safeParse(args);
@@ -213,6 +232,24 @@ export async function executeTool(pool, name, rawArgs, ctx) {
                 limit: p.data.limit ?? null,
             });
             return { rows };
+        }
+        case 'statcast_compare_statcast_summary': {
+            const p = statcastCompareStatcastArgsSchema.safeParse(args);
+            if (!p.success)
+                return { error: 'invalid_args', details: p.error.flatten() };
+            const ra = await resolvePlayerIdFromQuery(pool, p.data.player_a_query.trim());
+            if ('error' in ra)
+                return { error: ra.error, stage: 'resolve_a' };
+            const rb = await resolvePlayerIdFromQuery(pool, p.data.player_b_query.trim());
+            if ('error' in rb)
+                return { error: rb.error, stage: 'resolve_b' };
+            const role = p.data.role ?? 'pitcher';
+            return compareStatcastSummary(pool, {
+                player_ids: [ra.player_id, rb.player_id],
+                role,
+                game_year: p.data.game_year,
+                enhanced: true,
+            });
         }
         default:
             return { error: 'unknown_tool', name };

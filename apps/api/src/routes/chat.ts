@@ -23,7 +23,7 @@ export function registerChatRoute(app: FastifyInstance) {
         reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
         return;
       }
-      const { message } = parsed.data;
+      const { message, active_player_id, active_season } = parsed.data;
 
       reply.hijack();
       const res = reply.raw;
@@ -52,6 +52,8 @@ export function registerChatRoute(app: FastifyInstance) {
         await runWithChatQueryLog(req.log as ChatStreamLogger, async () =>
           streamOllamaChatWithTools(pool, message, write, req.log as ChatStreamLogger, {
             traceId: req.id,
+            active_player_id: active_player_id ?? undefined,
+            active_season: active_season ?? undefined,
           })
         );
         write('done', {});

@@ -36,7 +36,9 @@ function lastSuccessfulResolvePayload(messages: ToolMessage[]): { candidates?: A
       const j = JSON.parse(c) as Record<string, unknown>;
       if (j.error) continue;
       const candidates = j.candidates as Array<{ player_id?: unknown }> | undefined;
-      if (candidates?.length && candidates[0]?.player_id != null) return j as { candidates: Array<{ player_id?: unknown }> };
+      if (candidates?.length === 1 && candidates[0]?.player_id != null) {
+        return j as { candidates: Array<{ player_id?: unknown }> };
+      }
     } catch {
       continue;
     }
@@ -82,7 +84,7 @@ export function enrichToolArgs(name: string, rawArgs: unknown, ctx: ToolContext)
     // Models often pass a bogus small integer; a lone resolve candidate is authoritative.
     if (resolved != null && got !== resolved) {
       base.player_id = resolved;
-    } else if (got == null && r?.candidates?.[0]?.player_id != null) {
+    } else if (got == null && r?.candidates?.length === 1 && r.candidates[0]?.player_id != null) {
       const n = toPositiveInt(r.candidates[0].player_id);
       if (n != null) base.player_id = n;
     }
@@ -98,7 +100,7 @@ export function enrichToolArgs(name: string, rawArgs: unknown, ctx: ToolContext)
       delete base.season_from;
       delete base.season_to;
     } else {
-      delete base.season;
+      if (base.season == null || base.season === '') delete base.season;
       delete base.season_from;
       delete base.season_to;
     }
@@ -117,7 +119,10 @@ export function enrichToolArgs(name: string, rawArgs: unknown, ctx: ToolContext)
       base.game_year = parseInt(base.game_year.trim(), 10);
     }
     const r = lastSuccessfulResolvePayload(ctx.messages);
-    const mlbam = (r?.candidates?.[0] as Record<string, unknown> | undefined)?.key_mlbam;
+    const mlbam =
+      r?.candidates?.length === 1
+        ? (r.candidates[0] as Record<string, unknown> | undefined)?.key_mlbam
+        : undefined;
     const mGot = toPositiveInt(base.batter_mlbam);
     const mResolved = toPositiveInt(mlbam);
     if (mResolved != null && mGot !== mResolved) {
@@ -136,7 +141,8 @@ export function enrichToolArgs(name: string, rawArgs: unknown, ctx: ToolContext)
       base.game_year = parseInt(base.game_year.trim(), 10);
     }
     const r = lastSuccessfulResolvePayload(ctx.messages);
-    const cand0 = r?.candidates?.[0] as Record<string, unknown> | undefined;
+    const cand0 =
+      r?.candidates?.length === 1 ? (r.candidates[0] as Record<string, unknown> | undefined) : undefined;
     const mlbam = cand0?.key_mlbam;
     const mGot = toPositiveInt(base.mlbam);
     const mResolved = toPositiveInt(mlbam);

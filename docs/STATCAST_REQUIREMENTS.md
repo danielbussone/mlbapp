@@ -110,7 +110,57 @@ All modes write **`statcast_pitch`** with the same column mapping and conflict t
 
 ---
 
-## 10. Testing (target)
+## 10. Sprint speed + 90 ft running splits (add-on ETL)
+
+**Not pitch-level:** Savant **leaderboard** CSVs via `pybaseball` — separate from `pnpm etl:statcast`.
+
+| Piece | Location |
+|-------|-----------|
+| ETL | [`etl/mlbapp_etl/sprint_running.py`](../etl/mlbapp_etl/sprint_running.py) |
+| CLI | `pnpm etl:sprint` — args: `--season Y` (repeatable), `--min-opp-sprint` (default 10), `--min-opp-splits` (default 5), `--dry-run`, `--notes` |
+| Tables | `player_season_sprint_speed` ([V16](../db/sql/V16__statcast_savant_bip_sprint.sql)); `player_season_running_splits` ([V21](../db/sql/V21__player_season_running_splits.sql)) |
+| pybaseball | `statcast_sprint_speed`, `statcast_running_splits` (called twice: `raw_splits=True` and `False` for percentiles) |
+| `ingest_snapshot.source` | **`statcast_sprint_running`** (one snapshot per `--season` value written) |
+
+Reuses `MLBAPP_STATCAST_THROTTLE_SECONDS` between Savant requests (same helper as pitch ETL). Compliance: same Savant / MLB posture as [DATASETS.md](./DATASETS.md).
+
+---
+
+## 11. Directional OAA — outfield grid (`savant_fielding_oaa_cell`)
+
+**Not pitch-level:** Savant **Directional Outs Above Average** CSV (six slices per qualified outfielder), separate from `pnpm etl:statcast`.
+
+| Piece | Location |
+|-------|-----------|
+| ETL | [`etl/mlbapp_etl/fielding_oaa_cell.py`](../etl/mlbapp_etl/fielding_oaa_cell.py) |
+| CLI | `pnpm etl:fielding-oaa` — `--season Y` (repeatable) fetches via `pybaseball.statcast_outfield_directional_oaa` (same URL as Savant’s `directional_outs_above_average?…&csv=true`). Or `--csv PATH` / `--csv -` with `--game-year Y` for a downloaded file. |
+| Flags | `--min-opp N` or `--min-opp q` (Savant qualified); default **`1`** for maximum player coverage on cards. **`--replace-season`** deletes existing `cell_id LIKE 'of_dir_%'` for that `game_year` before insert (stale players when tightening `min-opp`). `--dry-run`, `--notes`. |
+| Table | `savant_fielding_oaa_cell` ([V14](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql)) |
+| pybaseball | `statcast_outfield_directional_oaa(year, min_opp)` |
+| `ingest_snapshot.source` | **`statcast_fielding_oaa_directional_of`** (one snapshot per season or CSV run) |
+| `cell_id` | **`of_dir_back_left`**, **`of_dir_back`**, **`of_dir_back_right`**, **`of_dir_in_left`**, **`of_dir_in`**, **`of_dir_in_right`** — maps from CSV columns `n_oaa_slice_*`; aggregate columns `*_all` are skipped. |
+| `attempts` | **NULL** on slice rows (CSV has only player-level total attempts, not per slice). |
+
+### 11b. Infield OAA — directional + split columns (`savant_fielding_oaa_cell`)
+
+**Not the outfield Directional OAA page:** this is Savant’s **Outs Above Average** leaderboard for **infield** (`pos=if` in the site URL), exposed as `pybaseball.statcast_outs_above_average(year, 'if', min_att)`.
+
+| Piece | Location |
+|-------|-----------|
+| ETL | Same module: [`etl/mlbapp_etl/fielding_oaa_cell.py`](../etl/mlbapp_etl/fielding_oaa_cell.py) |
+| CLI | `pnpm etl:fielding-oaa-if` (alias for `pnpm etl:fielding-oaa --feed infield`) — `--season Y` fetches the IF leaderboard CSV. Or `pnpm etl:fielding-oaa --feed infield …`. Manual export: same module with `--csv` / `--feed infield --game-year Y`. |
+| Flags | Same as §11: `--min-opp`, `--replace-season` (deletes `if_dir_%` and `if_split_%` for that `game_year`), `--dry-run`, `--notes`. |
+| Table | `savant_fielding_oaa_cell` (same as §11) |
+| pybaseball | `statcast_outs_above_average(year, "if", min_att)` |
+| `ingest_snapshot.source` | **`statcast_fielding_oaa_if_directional`** |
+| `cell_id` | **`if_dir_in`**, **`if_dir_toward_3b`**, **`if_dir_toward_1b`**, **`if_dir_behind`**, **`if_split_rhh`**, **`if_split_lhh`** — from `outs_above_average_infront`, `…_lateral_toward3bline`, `…_lateral_toward1bline`, `…_behind`, `…_rhh`, `…_lhh`. |
+| `attempts` | **NULL** (per-bucket attempts not in this export). |
+
+Reuses `MLBAPP_STATCAST_THROTTLE_SECONDS` between seasons in a multi-year CLI run.
+
+---
+
+## 12. Testing (target)
 
 - **Unit:** Mocked or fixture DataFrames — column rename map, `game_year` extraction, dedupe on natural key, SQL row tuple builder.
 - **Fixtures:** Small frozen CSV/JSON under `etl/tests/fixtures/` representing a few pitches with representative columns.
@@ -118,13 +168,13 @@ All modes write **`statcast_pitch`** with the same column mapping and conflict t
 
 ---
 
-## 11. Compliance and ops (recap)
+## 13. Compliance and ops (recap)
 
 - Bulk automated access must respect **MLB / Savant** terms and robots guidance; no assumption of rights to **redistribute** commercial datasets. See [DATASETS.md](./DATASETS.md) and [http-and-official-apis.md](./data-sources/http-and-official-apis.md).
 
 ---
 
-## 12. Traceability checklist (implementation)
+## 14. Traceability checklist (implementation)
 
 | Requirement area | Artifact |
 |------------------|----------|

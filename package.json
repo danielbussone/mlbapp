@@ -10,13 +10,18 @@
     "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @mlbapp/api dev\" \"pnpm --filter @mlbapp/web dev\"",
     "build": "pnpm -r run build",
     "lint": "pnpm -r run lint",
+    "db:refresh-percentiles": "bash scripts/run-refresh-statcast-percentile-mvs.sh",
     "db:migrate": "docker compose --profile tools run --rm flyway",
     "db:repair": "docker compose --profile tools run --rm flyway repair",
     "etl:install": "(test -d .venv-etl || python3 -m venv .venv-etl) && .venv-etl/bin/python -m pip install -e './etl[dev]'",
     "etl:fg": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fg",
     "etl:chadwick": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.chadwick",
     "etl:statcast": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.statcast",
-    "chat:checklist": "bash scripts/validate-chat-checklist.sh"
+    "etl:sprint": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.sprint_running",
+    "etl:fielding-oaa": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fielding_oaa_cell",
+    "etl:fielding-oaa-if": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fielding_oaa_cell --feed infield",
+    "chat:checklist": "bash scripts/validate-chat-checklist.sh",
+    "test:shared": "pnpm --filter @mlbapp/shared test"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

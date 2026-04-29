@@ -13,7 +13,9 @@ import type { CardRole } from './PlayerCardPanel.js';
 import { PlayerCardPanel } from './PlayerCardPanel.js';
 
 function parseCardRole(s: string | null): CardRole {
-  return s === 'pitching' ? 'pitching' : 'batting';
+  if (s === 'pitching') return 'pitching';
+  if (s === 'fielding') return 'fielding';
+  return 'batting';
 }
 
 export function PlayerCardPage() {

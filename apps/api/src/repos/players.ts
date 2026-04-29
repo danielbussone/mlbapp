@@ -173,6 +173,111 @@ export async function getPlayersByIds(
   return rowsToJson(rows as Record<string, unknown>[]);
 }
 
+export type FgCareerDisambiguationHint = {
+  player_id: number;
+  fg_seasons: number;
+  /** Top team abbreviations by combined batting+pitching games, comma-separated (up to 5). */
+  teams_display: string;
+};
+
+/**
+ * FanGraphs-backed hints for UI disambiguation (season count + familiar team codes).
+ */
+export async function getFgCareerHintsForPlayerIds(
+  pool: pg.Pool,
+  playerIds: number[]
+): Promise<FgCareerDisambiguationHint[]> {
+  const ids = [...new Set(playerIds)].filter((n) => Number.isInteger(n) && n > 0);
+  if (ids.length === 0) return [];
+
+  const { rows } = await pool.query(
+    `
+    WITH seasons AS (
+      SELECT DISTINCT s.player_id, s.season
+      FROM (
+        SELECT b.player_id, b.season::integer AS season
+        FROM fg_batting_season_current b
+        WHERE b.player_id = ANY($1::bigint[])
+        UNION
+        SELECT f.player_id, f.season::integer AS season
+        FROM fg_pitching_season_current f
+        WHERE f.player_id = ANY($1::bigint[])
+      ) s
+    ),
+    season_counts AS (
+      SELECT player_id, COUNT(*)::integer AS fg_seasons
+      FROM seasons
+      GROUP BY player_id
+    ),
+    team_games AS (
+      SELECT player_id, TRIM(team) AS team, SUM(games)::bigint AS g
+      FROM (
+        SELECT player_id, team, games
+        FROM fg_batting_season_current
+        WHERE player_id = ANY($1::bigint[])
+          AND team IS NOT NULL AND TRIM(team) <> ''
+        UNION ALL
+        SELECT player_id, team, games
+        FROM fg_pitching_season_current
+        WHERE player_id = ANY($1::bigint[])
+          AND team IS NOT NULL AND TRIM(team) <> ''
+      ) u
+      GROUP BY player_id, team
+    ),
+    team_ranked AS (
+      SELECT player_id, team,
+             ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY g DESC NULLS LAST) AS rn
+      FROM team_games
+    ),
+    team_pick AS (
+      SELECT player_id, string_agg(team, ', ' ORDER BY rn) AS teams_display
+      FROM team_ranked
+      WHERE rn <= 5
+      GROUP BY player_id
+    )
+    SELECT
+      pid.player_id::bigint AS player_id,
+      COALESCE(sc.fg_seasons, 0)::integer AS fg_seasons,
+      COALESCE(tp.teams_display, '') AS teams_display
+    FROM unnest($1::bigint[]) AS pid(player_id)
+    LEFT JOIN season_counts sc ON sc.player_id = pid.player_id
+    LEFT JOIN team_pick tp ON tp.player_id = pid.player_id
+    `,
+    [ids]
+  );
+  return rowsToJson(rows as Record<string, unknown>[]).map((r) => ({
+    player_id: Number(r.player_id),
+    fg_seasons: Number(r.fg_seasons ?? 0),
+    teams_display: String(r.teams_display ?? ''),
+  }));
+}
+
+/** One-line copy for pick lists (e.g. “14 seasons with SEA and NYY”). */
+export function formatCareerDisambiguationHint(h: FgCareerDisambiguationHint): string {
+  const n = h.fg_seasons;
+  const raw = h.teams_display.trim();
+  const parts = raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (n <= 0) {
+    return 'No FanGraphs MLB seasons on file';
+  }
+  const sez = n === 1 ? '1 season' : `${n} seasons`;
+  if (parts.length === 0) {
+    return `${sez} in database`;
+  }
+  let teamsPhrase: string;
+  if (parts.length === 1) {
+    teamsPhrase = parts[0]!;
+  } else if (parts.length === 2) {
+    teamsPhrase = `${parts[0]} and ${parts[1]}`;
+  } else {
+    teamsPhrase = `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+  }
+  return `${sez} with ${teamsPhrase}`;
+}
+
 export async function resolvePlayerIdFromQuery(
   pool: pg.Pool,
   name_query: string

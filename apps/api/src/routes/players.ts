@@ -10,22 +10,33 @@ import { getFgSeasonLines, type FgRole } from '../repos/fangraphsSeason.js';
 import { compareFgCareer } from '../repos/compareFgCareer.js';
 import { compareStatcastSummary } from '../repos/compareStatcastSummary.js';
 import { getFgFieldingSeasonLines } from '../repos/fangraphsFielding.js';
-import { getPlayerById, resolvePlayer, resolvePlayerIdFromQuery } from '../repos/players.js';
+import { narrowCandidatesByGenerationalHint } from '../lib/playerNameQuery.js';
+import { getMlbBioPayload } from '../repos/playerMlbBio.js';
+import {
+  formatCareerDisambiguationHint,
+  getFgCareerHintsForPlayerIds,
+  getPlayerById,
+  resolvePlayer,
+  resolvePlayerIdFromQuery,
+} from '../repos/players.js';
 import {
   clampGameYear,
   statcastBatterBatPathSummary,
   statcastBatterBatPathTimeseries,
   statcastBatterBattedBall,
+  statcastLeagueAvgVeloByPitchType,
   statcastLeagueMovementByYear,
   statcastPitcherMixByYearRange,
   statcastPitcherPitchMix,
   statcastPitcherPitchMixExtended,
+  statcastPitcherPitchMixExtendedByBatterStand,
   statcastPitcherVeloHistogram,
   statcastPitcherThrowsHand,
   statcastSampleRows,
   statcastSummaryHasRenderableData,
 } from '../repos/statcast.js';
 import { statcastFieldingOaaCells } from '../repos/statcastFielding.js';
+import { getLeaguePercentilesForPlayer } from '../repos/leaguePercentiles.js';
 
 const fgSeasonQuerySchema = z.object({
   role: z.enum(['batting', 'pitching']),
@@ -63,6 +74,10 @@ const comparePlayerIdsSchema = z.object({
     .refine((arr: number[]) => arr.length >= 2 && arr.length <= 4, 'player_ids must list 2–4 distinct numeric ids'),
 });
 
+const compareFgCareerQuerySchema = comparePlayerIdsSchema.extend({
+  season: z.coerce.number().int().min(1900).max(2100).optional(),
+});
+
 const compareStatcastQuerySchema = comparePlayerIdsSchema.extend({
   role: z.enum(['pitcher', 'batter']),
   game_year: z.coerce.number().int(),
@@ -80,11 +95,23 @@ const fgFieldingQuerySchema = z.object({
   season: z.coerce.number().int().optional(),
   season_from: z.coerce.number().int().optional(),
   season_to: z.coerce.number().int().optional(),
-  limit: z.coerce.number().int().min(1).max(60).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 const fieldingOaaQuerySchema = z.object({
   game_year: z.coerce.number().int(),
+});
+
+const leaguePercentilesQuerySchema = z.object({
+  game_year: z.coerce.number().int(),
+  role: z.enum(['batter', 'pitcher', 'fielding']),
+  /** Ignored for `fielding` (server discovers positions); optional for other roles / legacy clients. */
+  position: z.string().max(16).optional(),
+});
+
+const mlbBioQuerySchema = z.object({
+  /** FanGraphs card season — used with warehouse birth_date for “season age” (July 1). */
+  season: z.coerce.number().int().min(1900).max(2100).optional(),
 });
 
 const fgBattingCardQuerySchema = z.object({
@@ -164,7 +191,25 @@ export function registerPlayersRoutes(app: FastifyInstance) {
       const resolved = await resolvePlayerIdFromQuery(pool, parsed.data.name_query);
       if ('error' in resolved) {
         const ambiguous = resolved.error.startsWith('Ambiguous player query');
-        reply.code(ambiguous ? 409 : 404).send({ error: resolved.error });
+        if (ambiguous) {
+          const raw = await resolvePlayer(pool, { name_query: parsed.data.name_query, limit: 8 });
+          let candidates = (raw.candidates as Record<string, unknown>[]) ?? [];
+          candidates = narrowCandidatesByGenerationalHint(parsed.data.name_query, candidates);
+          const pids = candidates
+            .map((c) => Number(c.player_id))
+            .filter((id) => Number.isFinite(id) && id > 0);
+          const hints = await getFgCareerHintsForPlayerIds(pool, pids);
+          const hintBy = new Map(hints.map((h) => [h.player_id, h]));
+          const withHints = candidates.map((c) => {
+            const pid = Number(c.player_id);
+            const h = hintBy.get(pid);
+            const career_hint = h ? formatCareerDisambiguationHint(h) : 'No FanGraphs MLB seasons on file';
+            return { ...c, career_hint };
+          });
+          reply.code(409).send({ error: resolved.error, candidates: withHints });
+          return;
+        }
+        reply.code(404).send({ error: resolved.error });
         return;
       }
       reply.send({ player_id: resolved.player_id });
@@ -179,14 +224,17 @@ export function registerPlayersRoutes(app: FastifyInstance) {
       dbUnavailable(reply);
       return;
     }
-    const parsed = comparePlayerIdsSchema.safeParse(req.query ?? {});
+    const parsed = compareFgCareerQuerySchema.safeParse(req.query ?? {});
     if (!parsed.success) {
       reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
       return;
     }
     try {
       const pool = getPool();
-      const payload = await compareFgCareer(pool, { player_ids: parsed.data.player_ids });
+      const payload = await compareFgCareer(pool, {
+        player_ids: parsed.data.player_ids,
+        season: parsed.data.season ?? null,
+      });
       if ('error' in payload) {
         reply.code(400).send(payload);
         return;
@@ -455,10 +503,14 @@ export function registerPlayersRoutes(app: FastifyInstance) {
         const pitcherThrows = await statcastPitcherThrowsHand(pool, mlbam, effectiveYear);
         if (pitcherThrows != null) out.pitcher_throws = pitcherThrows;
 
-        const [mixRows, mixExt, veloHist, leagueMov, sampleRows] = await Promise.all([
+        const [mixRows, mixExt, mixExtByStand, veloHist, leagueVeloByPt, leagueMov, sampleRows] = await Promise.all([
           wantMix ? statcastPitcherPitchMix(pool, mlbam, effectiveYear) : Promise.resolve(undefined),
           wantMixExt ? statcastPitcherPitchMixExtended(pool, mlbam, effectiveYear) : Promise.resolve(undefined),
+          wantMixExt
+            ? statcastPitcherPitchMixExtendedByBatterStand(pool, mlbam, effectiveYear)
+            : Promise.resolve(undefined),
           wantVelo ? statcastPitcherVeloHistogram(pool, mlbam, effectiveYear) : Promise.resolve(undefined),
+          wantVelo ? statcastLeagueAvgVeloByPitchType(pool, effectiveYear) : Promise.resolve(undefined),
           wantLeagueMov
             ? statcastLeagueMovementByYear(pool, effectiveYear, pitcherThrows)
             : Promise.resolve(undefined),
@@ -473,7 +525,9 @@ export function registerPlayersRoutes(app: FastifyInstance) {
         ]);
         if (mixRows !== undefined) out.mix = mixRows;
         if (mixExt !== undefined) out.mix_extended = mixExt;
+        if (mixExtByStand !== undefined) out.mix_extended_by_stand = mixExtByStand;
         if (veloHist !== undefined) out.velo_dist = veloHist;
+        if (leagueVeloByPt !== undefined) out.league_avg_velo_by_pitch = leagueVeloByPt;
         if (leagueMov !== undefined) out.league_movement = leagueMov;
         if (sampleRows !== undefined) out.sample = sampleRows;
       } else {
@@ -509,7 +563,9 @@ export function registerPlayersRoutes(app: FastifyInstance) {
           'No Statcast-tracked pitches or batted balls in the database for this player in this season (typical for pre–Statcast careers or years with no ingest).';
         if (wantMix) delete out.mix;
         if (wantMixExt) delete out.mix_extended;
+        if (wantMixExt) delete out.mix_extended_by_stand;
         if (wantVelo) delete out.velo_dist;
+        if (wantVelo) delete out.league_avg_velo_by_pitch;
         if (wantLeagueMov) delete out.league_movement;
         if (wantSample) delete out.sample;
         delete out.pitcher_throws;
@@ -648,6 +704,107 @@ export function registerPlayersRoutes(app: FastifyInstance) {
         game_year_effective: clampGameYear(parsed.data.game_year),
         cells,
       });
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  app.get('/players/:playerId/league-percentiles', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    const parsed = leaguePercentilesQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const player = await getPlayerById(pool, playerId);
+      if (!player) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      const gy = clampGameYear(parsed.data.game_year);
+      const mlbam = player.key_mlbam;
+      const payload = await getLeaguePercentilesForPlayer(pool, {
+        player_id: playerId,
+        key_mlbam: typeof mlbam === 'number' && Number.isFinite(mlbam) ? mlbam : null,
+        game_year: gy,
+        role: parsed.data.role,
+        position: parsed.data.position ?? null,
+      });
+      reply.send({
+        player_id: playerId,
+        key_mlbam: typeof mlbam === 'number' && Number.isFinite(mlbam) ? mlbam : null,
+        ...payload,
+      });
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  /**
+   * MLB Stats API snapshot bio (read-through `player_bio_cache`, 24h TTL).
+   * Requires `dim_player.key_mlbam`; 404 if absent.
+   */
+  app.get('/players/:playerId/mlb-bio', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    const parsed = mlbBioQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const player = await getPlayerById(pool, playerId);
+      if (!player) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      const mlbam = player.key_mlbam;
+      const birth =
+        player.birth_date != null && player.birth_date !== ''
+          ? String(player.birth_date).slice(0, 10)
+          : null;
+      const seasonYear =
+        parsed.data.season != null ? parsed.data.season : new Date().getFullYear();
+      const r = await getMlbBioPayload(
+        pool,
+        playerId,
+        typeof mlbam === 'number' ? mlbam : null,
+        birth,
+        seasonYear
+      );
+      if (!r.ok) {
+        if (r.reason === 'no_mlbam') {
+          reply.code(404).send({ error: 'Player has no MLBAM id' });
+          return;
+        }
+        if (r.reason === 'fetch_failed') {
+          reply.code(503).send({ error: 'MLB Stats API unavailable' });
+          return;
+        }
+        reply.code(500).send({ error: 'Unexpected bio error' });
+        return;
+      }
+      reply.send(r.payload);
     } catch (e) {
       req.log.error(e);
       reply.code(500).send({ error: 'Database error' });

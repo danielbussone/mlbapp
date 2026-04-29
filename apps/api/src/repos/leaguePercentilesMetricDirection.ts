@@ -1,0 +1,64 @@
+import type { PercentileDirection } from './leaguePercentilesTypes.js';
+
+/** Default when a metric id is not listed (Statcast/FanGraphs raw percentiles). */
+export function directionForMetric(metricId: string): PercentileDirection {
+  return DIRECTION_BY_METRIC_ID[metricId] ?? 'higher_better';
+}
+
+const DIRECTION_BY_METRIC_ID: Record<string, PercentileDirection> = {
+  // FanGraphs batting season
+  fg_season_xwoba: 'higher_better',
+  fg_season_k_pct: 'lower_better',
+  fg_season_bb_pct: 'higher_better',
+  fg_season_avg: 'higher_better',
+  fg_season_slg: 'higher_better',
+  // FanGraphs pitching season
+  fg_season_pit_xera: 'lower_better',
+  fg_season_pit_k_pct: 'higher_better',
+  fg_season_pit_bb_pct: 'lower_better',
+  // Statcast batter (existing + Savant BIP MV)
+  bip_avg_exit_velo: 'higher_better',
+  bip_avg_launch_angle: 'higher_better',
+  bip_hard_hit_pct: 'higher_better',
+  bip_barrel_pct: 'higher_better',
+  bip_sweet_spot_pct: 'higher_better',
+  bip_avg_estimated_ba: 'higher_better',
+  swing_avg_bat_speed: 'higher_better',
+  swing_avg_attack_angle: 'higher_better',
+  swing_avg_attack_direction: 'higher_better',
+  swing_avg_path_tilt: 'higher_better',
+  bat_chase_pct: 'lower_better',
+  bat_whiff_pct: 'lower_better',
+  // Statcast pitcher
+  pitch_avg_exit_velo_on_bip: 'lower_better',
+  pitch_chase_pct: 'higher_better',
+  pitch_whiff_pct: 'higher_better',
+  pitch_swstr_pct: 'higher_better',
+  pitch_zone_pct: 'higher_better',
+  pitch_swing_pct: 'higher_better',
+  pitch_gb_pct: 'higher_better',
+  pitch_fb_pct: 'higher_better',
+  pitch_hr_pct: 'lower_better',
+  pitch_avg_release_extension: 'higher_better',
+  pitch_ff_avg_velo: 'higher_better',
+  pitch_avg_velo: 'higher_better',
+  pitch_avg_spin: 'higher_better',
+  pitch_avg_pfx_x: 'higher_better',
+  pitch_avg_pfx_z: 'higher_better',
+  pitch_barrel_pct_allowed: 'lower_better',
+  pitch_sweet_spot_pct_allowed: 'lower_better',
+  pitch_avg_estimated_ba_allowed: 'lower_better',
+  pitch_hard_hit_pct_allowed: 'lower_better',
+  // FG fielding runs saved
+  pos_drs: 'higher_better',
+  pos_uzr: 'higher_better',
+  pos_oaa: 'higher_better',
+  pos_frv: 'higher_better',
+  pos_inn: 'higher_better',
+  // Placeholders (product copy explains ingest)
+  fld_savant_range_oaa: 'higher_better',
+  fld_savant_arm_value: 'higher_better',
+  fld_savant_arm_strength: 'higher_better',
+  // Running
+  running_sprint_speed: 'higher_better',
+};

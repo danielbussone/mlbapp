@@ -1,8 +1,8 @@
 import type pg from 'pg';
 import { rowsToJson } from './rowJson.js';
 
-/** Match FG rows to dim_player by surrogate id or fangraphs external id. */
-function playerFgPredicate(alias: string): string {
+/** Match FG rows to dim_player by surrogate id or fangraphs external id (`$1` = dim `player_id`). */
+export function playerFgPredicate(alias: string): string {
   return `(
     ${alias}.player_id = $1
     OR EXISTS (
@@ -20,7 +20,7 @@ export type FgFieldingQuery = {
   limit?: number | null;
 };
 
-const MAX_ROWS = 60;
+const MAX_ROWS = 200;
 
 /**
  * FanGraphs fielding lines from `fg_fielding_season_current` (V14+).

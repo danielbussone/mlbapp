@@ -1,4 +1,6 @@
 import type { FgBattingCardApi } from './batterFgTables.js';
+import type { StatcastSummaryPayload } from './statcastSummaryPayload.js';
+import { parseStatcastSummaryPayload } from './statcastSummaryPayload.js';
 
 /** Matches API player JSON cached by `PlayerCardPanel` (avoids importing the panel). */
 export type CachedPlayerRow = {
@@ -83,16 +85,18 @@ export function getCachedStatcast(
   playerId: number,
   role: 'batting' | 'pitching',
   season: number
-): Record<string, unknown> | undefined {
+): StatcastSummaryPayload | undefined {
   const v = touchGet(playerCardStatcastKey(playerId, role, season));
-  return v !== undefined ? (v as Record<string, unknown>) : undefined;
+  if (v === undefined) return undefined;
+  const parsed = parseStatcastSummaryPayload(v);
+  return parsed.ok ? parsed.value : undefined;
 }
 
 export function setCachedStatcast(
   playerId: number,
   role: 'batting' | 'pitching',
   season: number,
-  payload: Record<string, unknown>
+  payload: StatcastSummaryPayload
 ): void {
   put(playerCardStatcastKey(playerId, role, season), payload);
 }

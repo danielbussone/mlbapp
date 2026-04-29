@@ -1,18 +1,76 @@
+import { basename } from 'node:path';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { inferExplicitSeasonYearFromUserMessage, inferPlayerNameQueryFromUserMessage, } from '../lib/chatUserIntentArgs.js';
+import { inferTwoPlayerCompareFromUserMessage } from '../lib/compareUserIntent.js';
+import { inferStatcastHostInject } from '../lib/statcastChatIntent.js';
+import { narrowCandidatesByGenerationalHint } from '../lib/playerNameQuery.js';
+import { getPlayerById, resolvePlayer } from '../repos/players.js';
+import { clipForChatLog, logOllamaPerformanceMetrics, logOllamaRoundRequest, logOllamaRoundResponse, logToolRun, } from '../lib/chatStreamLog.js';
+import { logChatProcessMemory } from '../lib/chatProcessMemoryLog.js';
+import { persistChatToolTrace } from '../lib/chatToolTrace.js';
 import { enrichToolArgs } from '../tools/argEnrichment.js';
 import { executeTool, ollamaToolDefinitions, toolResultString } from '../tools/registry.js';
 const OLLAMA_HOST = (process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'llama3.2';
+/** Context window for /api/chat; large tool JSON (e.g. career compare) exceeds many models' defaults and yields refusals or garbage. */
+const OLLAMA_NUM_CTX = (() => {
+    const raw = process.env.OLLAMA_NUM_CTX;
+    if (raw === undefined || raw === '')
+        return 32_768;
+    const n = parseInt(String(raw), 10);
+    if (!Number.isFinite(n))
+        return 32_768;
+    return Math.min(131_072, Math.max(4096, n));
+})();
 const MAX_TOOL_ROUNDS = 10;
 const TOOL_RESULT_SSE_MAX = 4000;
+/** Ollama /api/chat can sit on CPU for many minutes (large num_ctx + tool JSON + slow local GPU). */
+const OLLAMA_FETCH_TIMEOUT_MAX_MS = 7_200_000; // 2h cap via env
+const OLLAMA_FETCH_HEADERS_BODY_DEFAULT_MS = 1_800_000; // 30m default (15m was tight; seen ~903s failures)
+function readTimeoutMs(envVar, fallback, max = OLLAMA_FETCH_TIMEOUT_MAX_MS) {
+    const raw = process.env[envVar];
+    if (raw === undefined || raw === '')
+        return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0)
+        return fallback;
+    return Math.min(Math.max(n, 5_000), max);
+}
+/** Long /api/chat runs exceed Node default ~300s; tune with OLLAMA_FETCH_*_TIMEOUT_MS. */
+const ollamaChatDispatcher = new Agent({
+    headersTimeout: readTimeoutMs('OLLAMA_FETCH_HEADERS_TIMEOUT_MS', OLLAMA_FETCH_HEADERS_BODY_DEFAULT_MS),
+    bodyTimeout: readTimeoutMs('OLLAMA_FETCH_BODY_TIMEOUT_MS', OLLAMA_FETCH_HEADERS_BODY_DEFAULT_MS),
+    connectTimeout: readTimeoutMs('OLLAMA_FETCH_CONNECT_TIMEOUT_MS', 15_000, 120_000),
+});
+const ollamaHealthDispatcher = new Agent({
+    headersTimeout: 8_000,
+    bodyTimeout: 8_000,
+    connectTimeout: 5_000,
+});
+function persistFullToolIo(traceId, source, name, args, fullJson, log, userMessage) {
+    const filepath = persistChatToolTrace({
+        traceId,
+        tool: name,
+        source,
+        args,
+        resultJson: fullJson,
+        userMessagePreview: userMessage.slice(0, 500),
+    });
+    if (filepath && log) {
+        log.info({ step: 'tool_trace_persisted', tool: name, source, file: basename(filepath) }, 'chat full tool I/O written to disk (see CHAT_TOOL_TRACE_DIR)');
+    }
+}
 const SYSTEM_PROMPT = `You are a baseball statistics assistant backed by database tools.
 
 Allowed tools (use these exact names only; never invent other tool names):
-resolve_player, get_fg_season_line, compare_players_career, statcast_pitcher_pitch_mix, statcast_batter_batted_ball, statcast_sample_rows.
+resolve_player, get_fg_season_line, compare_players_career, statcast_pitcher_pitch_mix, statcast_batter_batted_ball, statcast_sample_rows, statcast_compare_statcast_summary.
 
 Workflow:
 - FanGraphs season lines (WAR, slash, counting stats): call resolve_player if you need player_id, then call get_fg_season_line with player_id (integer from candidates), role batting or pitching, and season or season_from/season_to. Do not claim FanGraphs data is missing until get_fg_season_line has returned.
 - Statcast (velo, pitch mix, batted balls): use key_mlbam from resolve_player as pitcher_mlbam or batter_mlbam plus game_year.
-- Two-player comparisons: compare_players_career.
+- resolve_player: when resolving by name, pass name_query as the player name from the user (e.g. "Mookie Betts"). The host may fill it from phrasing like "Tell me about …" if you omit it.
+- statcast_batter_batted_ball: the field bbe is a count of batted-ball events with measured launch_speed in Statcast for that year — it is **not** plate appearances and must **never** be described as batting average or converted to AVG/OBP/SLG. If bbe is 0 or avg_ev is null, say Statcast has little or no batted-ball data for that batter-year (sample or coverage gap), not a made-up slash line.
+- Two-player comparisons: compare_players_career (FanGraphs career rows for both players).
 
 Rules (strict):
 - Never invent or guess numeric statistics, dates, player IDs, team names, or counting metrics.
@@ -22,16 +80,37 @@ Rules (strict):
 - If a tool returns empty rows or no field you need, say so and say what you already queried; suggest a different tool or parameters only from the allowed list above.
 - Prefer calling tools before answering factual questions about players or seasons.
 - Never print fake tool JSON in your assistant text; only the host may run tools. Fix bad parameters and call the tool again.
-- Keep prose concise unless the user asks for detail.`;
+- After compare_players_career or any tool returns JSON: answer in plain English (headline stats, differences, caveats). Do not output JavaScript, Python, SQL, or “how to parse this JSON” unless the user explicitly asks for code.
+- Never invent internal ids (e.g. playerid), pitch-type labels, or nested arrays that are not present in the tool JSON you received.
+- If the user asks to compare two named players, you must address both players in your answer (not only one). Use FanGraphs fields from compare_players_career: players plus batting[].rows / pitching[].rows (e.g. season, war, avg, obp, slg, pa, hr). Do not invent Statcast-style keys (e.g. depth_in_box, competitive_swings) unless a Statcast tool in this thread actually returned them.
+- compare_players_career: join batting[].player_id and pitching[].player_id to players[].player_id; use players[].display_name (or name_first + name_last) for names. Numeric ids in rows are database keys, not the player’s name — never say the player “is named” a number.
+- Answer only what the user asked. Do not reframe their question (e.g. do not switch to “most accurate season”, “best year for metrics”, or invented “seasons” arrays) unless they used that wording.
+- Do not open with meta-commentary about “JSON format” or paste made-up JSON examples; summarize from real tool keys only.
+- When a prior tool message returns JSON without a top-level "error" key, you must answer from that data (names, seasons, stats). Never reply with a generic refusal such as “I can't provide that information” or “I cannot help with that” for grounded baseball stats.
+- Keep prose concise unless the user asks for detail.
+- If resolve_player returns multiple candidates, list their names and birth years and ask which player to use; never pick candidates[0] without user confirmation.
+- Do not state current MLB team, league MVP, or awards unless that information appears in tool JSON from this conversation.`;
 async function ollamaReachable() {
     try {
-        const r = await fetch(`${OLLAMA_HOST}/api/tags`, { method: 'GET' });
+        const r = await undiciFetch(`${OLLAMA_HOST}/api/tags`, {
+            method: 'GET',
+            dispatcher: ollamaHealthDispatcher,
+        });
         return r.ok;
     }
     catch {
         return false;
     }
 }
+/** Run resolve_player before tools that depend on its JSON (same Ollama round). */
+const TOOL_RUN_PRIORITY = {
+    resolve_player: 0,
+    get_fg_season_line: 10,
+    compare_players_career: 10,
+    statcast_pitcher_pitch_mix: 20,
+    statcast_batter_batted_ball: 20,
+    statcast_sample_rows: 25,
+};
 function normalizeToolCallBatches(batches) {
     const flat = batches.flat();
     const byIndex = new Map();
@@ -58,8 +137,14 @@ function normalizeToolCallBatches(batches) {
         }
     });
     return Array.from(byIndex.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([index, { name, args }]) => ({
+        .map(([index, v]) => ({
+        index,
+        name: v.name,
+        args: v.args,
+        pri: TOOL_RUN_PRIORITY[v.name] ?? 50,
+    }))
+        .sort((a, b) => (a.pri !== b.pri ? a.pri - b.pri : a.index - b.index))
+        .map(({ index, name, args }) => ({
         type: 'function',
         function: { index, name, arguments: args },
     }));
@@ -111,16 +196,38 @@ function truncateForSse(json) {
         return { preview: json, truncated: false };
     return { preview: json.slice(0, TOOL_RESULT_SSE_MAX) + '…', truncated: true };
 }
+/** Short generic refusals after a tool payload (context overflow or mis-tuned safety). */
+function looksLikeGenericRefusal(content) {
+    const t = content.trim().toLowerCase();
+    if (t.length > 180)
+        return false;
+    if (!/\b(can't|cannot|unable to|not able to|couldn't)\b/.test(t))
+        return false;
+    if (!/\b(help|provide|information|assist|share|answer|discuss|that)\b/.test(t))
+        return false;
+    return true;
+}
 /** Non-streaming round: reliable full `tool_calls` + `arguments` JSON from Ollama. */
-async function chatRoundNonStreaming(messages, tools, write) {
-    const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
+async function chatRoundNonStreaming(messages, tools, write, log, roundCtx, opts) {
+    logOllamaRoundRequest(log, {
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        model: OLLAMA_MODEL,
+        ollamaHost: OLLAMA_HOST,
+        messages,
+        tools,
+    });
+    const wallStart = Date.now();
+    const res = await undiciFetch(`${OLLAMA_HOST}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        dispatcher: ollamaChatDispatcher,
         body: JSON.stringify({
             model: OLLAMA_MODEL,
             messages,
             ...(tools && tools.length > 0 ? { tools } : {}),
             stream: false,
+            options: { num_ctx: OLLAMA_NUM_CTX },
         }),
     });
     if (!res.ok) {
@@ -128,9 +235,18 @@ async function chatRoundNonStreaming(messages, tools, write) {
         throw new Error(`Ollama error ${res.status}: ${t.slice(0, 500)}`);
     }
     const data = (await res.json());
+    const wallClockMs = Date.now() - wallStart;
+    logOllamaPerformanceMetrics(log, {
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        model: OLLAMA_MODEL,
+        ollamaHost: OLLAMA_HOST,
+        wallClockMs,
+        responseBody: data,
+    });
     const msg = data.message;
     const contentAcc = typeof msg?.content === 'string' ? msg.content : '';
-    if (contentAcc)
+    if (contentAcc && !opts?.suppressAssistantTokens)
         write('token', { text: contentAcc });
     const rawCalls = msg?.tool_calls;
     const mergedCalls = Array.isArray(rawCalls) ? normalizeToolCallBatches([rawCalls]) : [];
@@ -140,6 +256,14 @@ async function chatRoundNonStreaming(messages, tools, write) {
         content: contentAcc,
         ...(hadToolCalls ? { tool_calls: toolCallsForOllamaReplay(mergedCalls) } : {}),
     };
+    logOllamaRoundResponse(log, {
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        assistantContentChars: contentAcc.length,
+        assistantPreview: contentAcc ? clipForChatLog(contentAcc, 400) : undefined,
+        assistantFullText: contentAcc || undefined,
+        toolCallNames: mergedCalls.map((c) => c.function?.name ?? '').filter(Boolean),
+    });
     return { assistantMessage, hadToolCalls };
 }
 function userAskedFanGraphsSeasonLine(userMessage) {
@@ -148,8 +272,17 @@ function userAskedFanGraphsSeasonLine(userMessage) {
         /\b(batting|pitching)\s+line\b/.test(p) ||
         (/\bwar\b/.test(p) && /\b(season|year|\d{4})\b/.test(p)));
 }
+/** Broaden server FG injection beyond explicit FG phrasing (small models stall after resolve). */
+function shouldServerInjectFgSeasonLine(userMessage) {
+    if (userAskedFanGraphsSeasonLine(userMessage))
+        return true;
+    return inferPlayerNameQueryFromUserMessage(userMessage) != null;
+}
 function transcriptHasGetFgTool(messages) {
     return messages.some((m) => m.role === 'tool' && String(m.tool_name) === 'get_fg_season_line');
+}
+function transcriptHasCompareTool(messages) {
+    return messages.some((m) => m.role === 'tool' && String(m.tool_name) === 'compare_players_career');
 }
 function lastSuccessfulResolvePayload(messages) {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -173,6 +306,75 @@ function lastSuccessfulResolvePayload(messages) {
     }
     return null;
 }
+function transcriptHasResolvePlayer(messages) {
+    return messages.some((m) => m.role === 'tool' && String(m.tool_name) === 'resolve_player');
+}
+async function appendSyntheticResolvePlayerRound(messages, write, log, traceId, userMessage, name_query, resolveResult, source) {
+    const toolName = 'resolve_player';
+    const args = { name_query };
+    messages.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+            {
+                type: 'function',
+                function: { name: toolName, arguments: args },
+            },
+        ],
+    });
+    write('tool_start', { name: toolName, args: sseSafeArgs(args) });
+    const fullJson = toolResultString(resolveResult);
+    const { preview, truncated } = truncateForSse(fullJson);
+    write('tool_result', {
+        name: toolName,
+        truncated,
+        result_preview: preview,
+        result_chars: fullJson.length,
+    });
+    messages.push({
+        role: 'tool',
+        tool_name: toolName,
+        content: fullJson,
+    });
+    logToolRun(log, {
+        source,
+        name: toolName,
+        args,
+        resultJson: fullJson,
+        sseTruncated: truncated,
+    });
+    persistFullToolIo(traceId, source, toolName, args, fullJson, log, userMessage);
+}
+/**
+ * Host runs resolve before the first model turn when the message names a player (bio/search phrasing),
+ * so small models cannot skip tools and hallucinate FanGraphs lines.
+ */
+async function maybeServerDrivenResolveByNameAtStart(pool, userMessage, messages, write, log, traceId) {
+    if (inferTwoPlayerCompareFromUserMessage(userMessage))
+        return;
+    if (transcriptHasResolvePlayer(messages))
+        return;
+    const nameQ = inferPlayerNameQueryFromUserMessage(userMessage);
+    if (!nameQ)
+        return;
+    const raw = await resolvePlayer(pool, { name_query: nameQ, limit: 8 });
+    let candidates = raw.candidates ?? [];
+    candidates = narrowCandidatesByGenerationalHint(nameQ, candidates);
+    const resolveResult = { ...raw, candidates };
+    await appendSyntheticResolvePlayerRound(messages, write, log, traceId, userMessage, nameQ, resolveResult, 'server_resolve_inject');
+}
+async function maybeServerDrivenSyntheticActivePlayerResolve(pool, userMessage, messages, write, log, traceId, playerId) {
+    if (transcriptHasResolvePlayer(messages))
+        return;
+    const row = await getPlayerById(pool, playerId);
+    if (!row)
+        return;
+    const fn = String(row.name_first ?? '').trim();
+    const ln = String(row.name_last ?? '').trim();
+    const name_query = `${fn} ${ln}`.trim() || String(playerId);
+    const resolveResult = { candidates: [row], match_type: 'active_ui_card' };
+    await appendSyntheticResolvePlayerRound(messages, write, log, traceId, userMessage, name_query, resolveResult, 'server_active_resolve');
+}
 /** Model sometimes echoes resolve JSON instead of calling get_fg — drop that assistant turn. */
 function stripTrailingResolveJsonEcho(messages) {
     const last = messages[messages.length - 1];
@@ -185,6 +387,34 @@ function stripTrailingResolveJsonEcho(messages) {
         messages.pop();
     }
 }
+/**
+ * After resolve_player, some models reply with text ("I'll get his 2023 line") and no tools.
+ * Drop that turn so the transcript ends with the resolve tool message before server-injected get_fg.
+ */
+function stripTrailingAssistantStallAfterResolve(messages) {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant')
+        return;
+    const hasToolCalls = Array.isArray(last.tool_calls) && last.tool_calls.length > 0;
+    if (hasToolCalls)
+        return;
+    const prev = messages[messages.length - 2];
+    if (!prev || prev.role !== 'tool' || String(prev.tool_name) !== 'resolve_player')
+        return;
+    const raw = typeof prev.content === 'string' ? prev.content : '';
+    try {
+        const j = JSON.parse(raw);
+        if (j.error)
+            return;
+        const cand = j.candidates;
+        if (!cand || cand.length !== 1)
+            return;
+    }
+    catch {
+        return;
+    }
+    messages.pop();
+}
 function inferSeasonFromPrompt(userMessage) {
     const m = userMessage.match(/\b(19|20)\d{2}\b/);
     if (!m)
@@ -192,18 +422,22 @@ function inferSeasonFromPrompt(userMessage) {
     const y = parseInt(m[0], 10);
     return y >= 1900 && y <= 2100 ? y : null;
 }
-function inferFgRoleFromPrompt(userMessage) {
+function inferFgInjectionRoles(userMessage) {
     const p = userMessage.toLowerCase();
-    if (/\bpitching\b/.test(p) && !/\bbatting\b/.test(p))
-        return 'pitching';
-    return 'batting';
+    const pitchOnly = /\bpitching\b/.test(p) && !/\bbatting\b/.test(p);
+    const batOnly = /\bbatting\b/.test(p) && !/\bpitching\b/.test(p);
+    if (pitchOnly)
+        return ['pitching'];
+    if (batOnly)
+        return ['batting'];
+    return ['batting', 'pitching'];
 }
 /**
- * If the user asked for FanGraphs season stats, resolve succeeded, but get_fg was never run
- * (common small-model failure), run get_fg once from the resolved player_id and emit the same SSE shape.
+ * If the user wanted season-style context (explicit FG phrasing, or player bio phrasing like
+ * "tell me about …") and resolve succeeded but get_fg was never run, fetch FG once server-side.
  */
-async function maybeServerDrivenFgSeasonLine(pool, userMessage, messages, write) {
-    if (!userAskedFanGraphsSeasonLine(userMessage))
+async function maybeServerDrivenFgSeasonLine(pool, userMessage, messages, write, log, traceId, streamOptions) {
+    if (!shouldServerInjectFgSeasonLine(userMessage))
         return;
     if (transcriptHasGetFgTool(messages))
         return;
@@ -211,7 +445,11 @@ async function maybeServerDrivenFgSeasonLine(pool, userMessage, messages, write)
     if (!resolvePayload)
         return;
     stripTrailingResolveJsonEcho(messages);
-    const cand0 = resolvePayload.candidates[0];
+    stripTrailingAssistantStallAfterResolve(messages);
+    const cands = resolvePayload.candidates;
+    if (!Array.isArray(cands) || cands.length !== 1)
+        return;
+    const cand0 = cands[0];
     const rawPid = cand0?.player_id;
     const player_id = typeof rawPid === 'number' && Number.isFinite(rawPid)
         ? Math.trunc(rawPid)
@@ -220,25 +458,174 @@ async function maybeServerDrivenFgSeasonLine(pool, userMessage, messages, write)
             : NaN;
     if (!Number.isFinite(player_id) || player_id <= 0)
         return;
-    const role = inferFgRoleFromPrompt(userMessage);
-    const season = inferSeasonFromPrompt(userMessage);
-    const args = { player_id, role, ...(season != null ? { season } : {}) };
+    const roles = inferFgInjectionRoles(userMessage);
+    const season = inferExplicitSeasonYearFromUserMessage(userMessage) ??
+        inferSeasonFromPrompt(userMessage) ??
+        (streamOptions?.active_season != null && streamOptions.active_season > 0
+            ? Math.trunc(streamOptions.active_season)
+            : null);
     const name = 'get_fg_season_line';
     const toolCtx = { userMessage, messages };
+    for (const role of roles) {
+        const args = {
+            player_id,
+            role,
+            limit: 12,
+            ...(season != null ? { season } : {}),
+        };
+        messages.push({
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+                {
+                    type: 'function',
+                    function: { name, arguments: args },
+                },
+            ],
+        });
+        write('tool_start', { name, args: sseSafeArgs(args) });
+        let resultPayload;
+        try {
+            resultPayload = await executeTool(pool, name, args, toolCtx);
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            resultPayload = { error: 'tool_execution_failed', message: msg };
+        }
+        const fullJson = toolResultString(resultPayload);
+        const { preview, truncated } = truncateForSse(fullJson);
+        write('tool_result', {
+            name,
+            truncated,
+            result_preview: preview,
+            result_chars: fullJson.length,
+        });
+        messages.push({
+            role: 'tool',
+            tool_name: name,
+            content: fullJson,
+        });
+        logToolRun(log, {
+            source: 'server_fg_fallback',
+            name,
+            args,
+            resultJson: fullJson,
+            sseTruncated: truncated,
+        });
+        persistFullToolIo(traceId, 'server_fg_fallback', name, args, fullJson, log, userMessage);
+    }
+}
+/**
+ * Small models often skip compare_players_career or call unrelated Statcast tools. When the
+ * prompt matches "Compare X and Y", run compare once before the first model turn.
+ */
+function toPositiveMlbam(v) {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0)
+        return Math.trunc(v);
+    if (typeof v === 'string' && /^\d+$/.test(v.trim())) {
+        const n = parseInt(v.trim(), 10);
+        return Number.isFinite(n) && n > 0 ? n : null;
+    }
+    return null;
+}
+function transcriptHasStatcastPitchOrBatterTool(messages) {
+    return messages.some((m) => m.role === 'tool' &&
+        (String(m.tool_name) === 'statcast_pitcher_pitch_mix' ||
+            String(m.tool_name) === 'statcast_batter_batted_ball'));
+}
+async function appendExecutedToolRound(pool, messages, write, log, traceId, userMessage, toolName, args, source) {
     messages.push({
         role: 'assistant',
         content: '',
         tool_calls: [
             {
                 type: 'function',
-                function: { name, arguments: args },
+                function: { name: toolName, arguments: args },
             },
         ],
     });
-    write('tool_start', { name, args: sseSafeArgs(args) });
+    write('tool_start', { name: toolName, args: sseSafeArgs(args) });
+    const toolCtx = { userMessage, messages };
     let resultPayload;
     try {
-        resultPayload = await executeTool(pool, name, args, toolCtx);
+        resultPayload = await executeTool(pool, toolName, args, toolCtx);
+    }
+    catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        resultPayload = { error: 'tool_execution_failed', message: msg };
+    }
+    const fullJson = toolResultString(resultPayload);
+    const { preview, truncated } = truncateForSse(fullJson);
+    write('tool_result', {
+        name: toolName,
+        truncated,
+        result_preview: preview,
+        result_chars: fullJson.length,
+    });
+    messages.push({
+        role: 'tool',
+        tool_name: toolName,
+        content: fullJson,
+    });
+    logToolRun(log, {
+        source,
+        name: toolName,
+        args,
+        resultJson: fullJson,
+        sseTruncated: truncated,
+    });
+    persistFullToolIo(traceId, source, toolName, args, fullJson, log, userMessage);
+}
+async function maybeServerDrivenStatcastInject(pool, userMessage, messages, write, log, traceId) {
+    const spec = inferStatcastHostInject(userMessage);
+    if (!spec)
+        return;
+    if (transcriptHasStatcastPitchOrBatterTool(messages))
+        return;
+    if (transcriptHasResolvePlayer(messages))
+        return;
+    const raw = await resolvePlayer(pool, { name_query: spec.name_query, limit: 8 });
+    let cands = raw.candidates ?? [];
+    cands = narrowCandidatesByGenerationalHint(spec.name_query, cands);
+    const resolveResult = { ...raw, candidates: cands };
+    await appendSyntheticResolvePlayerRound(messages, write, log, traceId, userMessage, spec.name_query, resolveResult, 'server_resolve_inject');
+    if (cands.length !== 1)
+        return;
+    const mlbam = toPositiveMlbam(cands[0]?.key_mlbam);
+    if (mlbam == null)
+        return;
+    const toolName = spec.kind === 'pitcher_mix' ? 'statcast_pitcher_pitch_mix' : 'statcast_batter_batted_ball';
+    const args = spec.kind === 'pitcher_mix'
+        ? { pitcher_mlbam: mlbam, game_year: spec.game_year }
+        : { batter_mlbam: mlbam, game_year: spec.game_year };
+    await appendExecutedToolRound(pool, messages, write, log, traceId, userMessage, toolName, args, 'server_statcast_inject');
+}
+async function maybeServerDrivenCompareCareer(pool, userMessage, messages, write, log, traceId) {
+    const inferred = inferTwoPlayerCompareFromUserMessage(userMessage);
+    if (!inferred)
+        return;
+    if (transcriptHasCompareTool(messages))
+        return;
+    const name = 'compare_players_career';
+    const toolCtx = { userMessage, messages };
+    const y = inferExplicitSeasonYearFromUserMessage(userMessage);
+    const seasonSlice = y != null && y >= 1900 && y <= 2100 ? { season_from: y, season_to: y } : {};
+    // Omit pitching for host-injected compare: smaller payload; both players are overwhelmingly hitters in typical “compare X and Y” prompts.
+    const effectiveArgs = enrichToolArgs(name, { ...inferred, include_pitching: false, ...seasonSlice }, toolCtx);
+    messages.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+            {
+                type: 'function',
+                function: { name, arguments: effectiveArgs },
+            },
+        ],
+    });
+    write('tool_start', { name, args: sseSafeArgs(effectiveArgs) });
+    let resultPayload;
+    try {
+        resultPayload = await executeTool(pool, name, effectiveArgs, toolCtx);
     }
     catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -257,62 +644,121 @@ async function maybeServerDrivenFgSeasonLine(pool, userMessage, messages, write)
         tool_name: name,
         content: fullJson,
     });
+    logToolRun(log, {
+        source: 'server_compare_inject',
+        name,
+        args: effectiveArgs,
+        resultJson: fullJson,
+        sseTruncated: truncated,
+    });
+    persistFullToolIo(traceId, 'server_compare_inject', name, effectiveArgs, fullJson, log, userMessage);
 }
-export async function streamOllamaChatWithTools(pool, userMessage, write) {
+export async function streamOllamaChatWithTools(pool, userMessage, write, log, streamOptions) {
+    const traceId = streamOptions?.traceId;
     const prompt = userMessage.trim() || 'Say hello in one short sentence.';
     if (!(await ollamaReachable())) {
+        log?.info({ step: 'ollama_unreachable', ollamaHost: OLLAMA_HOST }, 'chat ollama unreachable; stub response');
         write('token', { text: '[Ollama unreachable at ' + OLLAMA_HOST + '] ' });
         write('token', {
             text: 'Stub: connect Ollama to use tools. You said: ' + JSON.stringify(prompt),
         });
         return;
     }
-    const messages = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-    ];
-    const tools = ollamaToolDefinitions;
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const { assistantMessage, hadToolCalls } = await chatRoundNonStreaming(messages, tools, write);
-        messages.push(assistantMessage);
-        if (!hadToolCalls)
-            break;
-        const toolCalls = assistantMessage.tool_calls;
-        for (const tc of toolCalls) {
-            const fn = tc.function;
-            const name = fn?.name;
-            if (!name)
-                continue;
-            const toolCtx = { userMessage: prompt, messages };
-            const effectiveArgs = enrichToolArgs(name, fn?.arguments, toolCtx);
-            write('tool_start', { name, args: sseSafeArgs(effectiveArgs) });
-            let resultPayload;
-            try {
-                resultPayload = await executeTool(pool, name, fn?.arguments, toolCtx);
+    logChatProcessMemory(log, 'stream_start');
+    try {
+        const messages = [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: prompt },
+        ];
+        await maybeServerDrivenCompareCareer(pool, prompt, messages, write, log, traceId);
+        await maybeServerDrivenStatcastInject(pool, prompt, messages, write, log, traceId);
+        const nameInMessage = inferPlayerNameQueryFromUserMessage(prompt);
+        if (nameInMessage) {
+            await maybeServerDrivenResolveByNameAtStart(pool, prompt, messages, write, log, traceId);
+        }
+        else if (streamOptions?.active_player_id != null &&
+            Number.isFinite(streamOptions.active_player_id) &&
+            streamOptions.active_player_id > 0) {
+            await maybeServerDrivenSyntheticActivePlayerResolve(pool, prompt, messages, write, log, traceId, Math.trunc(streamOptions.active_player_id));
+        }
+        const toolsAll = ollamaToolDefinitions;
+        for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            const toolsThisRound = transcriptHasCompareTool(messages)
+                ? toolsAll.filter((t) => (t.function?.name ?? '') !== 'compare_players_career')
+                : toolsAll;
+            const trailingTool = messages[messages.length - 1]?.role === 'tool';
+            let { assistantMessage, hadToolCalls } = await chatRoundNonStreaming(messages, toolsThisRound, write, log, { phase: 'tool_loop', round }, { suppressAssistantTokens: Boolean(trailingTool) });
+            messages.push(assistantMessage);
+            if (trailingTool) {
+                let text = typeof assistantMessage.content === 'string' ? assistantMessage.content : '';
+                let refusalRetried = false;
+                if (!hadToolCalls && (looksLikeGenericRefusal(text) || text.trim() === '')) {
+                    log?.info({
+                        step: 'ollama_refusal_retry',
+                        round,
+                        preview: clipForChatLog(text, 200),
+                    }, 'chat dropped assistant reply after tool; retrying without tools');
+                    messages.pop();
+                    ({ assistantMessage, hadToolCalls } = await chatRoundNonStreaming(messages, undefined, write, log, { phase: 'tool_loop_refusal_retry', round }));
+                    messages.push(assistantMessage);
+                    refusalRetried = true;
+                    text = typeof assistantMessage.content === 'string' ? assistantMessage.content : '';
+                }
+                if (text && !refusalRetried)
+                    write('token', { text });
             }
-            catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                resultPayload = { error: 'tool_execution_failed', message: msg };
+            if (!hadToolCalls)
+                break;
+            const toolCalls = assistantMessage.tool_calls;
+            for (const tc of toolCalls) {
+                const fn = tc.function;
+                const name = fn?.name;
+                if (!name)
+                    continue;
+                const toolCtx = { userMessage: prompt, messages };
+                const effectiveArgs = enrichToolArgs(name, fn?.arguments, toolCtx);
+                write('tool_start', { name, args: sseSafeArgs(effectiveArgs) });
+                let resultPayload;
+                try {
+                    resultPayload = await executeTool(pool, name, effectiveArgs, toolCtx);
+                }
+                catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    resultPayload = { error: 'tool_execution_failed', message: msg };
+                }
+                const fullJson = toolResultString(resultPayload);
+                const { preview, truncated } = truncateForSse(fullJson);
+                write('tool_result', {
+                    name,
+                    truncated,
+                    result_preview: preview,
+                    result_chars: fullJson.length,
+                });
+                messages.push({
+                    role: 'tool',
+                    tool_name: name,
+                    content: fullJson,
+                });
+                logToolRun(log, {
+                    source: 'model',
+                    name,
+                    args: effectiveArgs,
+                    resultJson: fullJson,
+                    sseTruncated: truncated,
+                });
+                persistFullToolIo(traceId, 'model', name, effectiveArgs, fullJson, log, prompt);
             }
-            const fullJson = toolResultString(resultPayload);
-            const { preview, truncated } = truncateForSse(fullJson);
-            write('tool_result', {
-                name,
-                truncated,
-                result_preview: preview,
-                result_chars: fullJson.length,
-            });
-            messages.push({
-                role: 'tool',
-                tool_name: name,
-                content: fullJson,
-            });
+        }
+        await maybeServerDrivenFgSeasonLine(pool, prompt, messages, write, log, traceId, streamOptions);
+        const last = messages[messages.length - 1];
+        if (last && last.role === 'tool') {
+            const { assistantMessage } = await chatRoundNonStreaming(messages, undefined, write, log, {
+                phase: 'summarize_after_tools',
+            }, {});
+            messages.push(assistantMessage);
         }
     }
-    await maybeServerDrivenFgSeasonLine(pool, prompt, messages, write);
-    const last = messages[messages.length - 1];
-    if (last && last.role === 'tool') {
-        const { assistantMessage } = await chatRoundNonStreaming(messages, undefined, write);
-        messages.push(assistantMessage);
+    finally {
+        logChatProcessMemory(log, 'stream_end');
     }
 }

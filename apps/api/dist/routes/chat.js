@@ -1,4 +1,5 @@
 import { chatRequestSchema } from '@mlbapp/shared';
+import { runWithChatQueryLog } from '../db/chatQueryLogContext.js';
 import { hasDatabaseUrl, getPool } from '../db/pool.js';
 import { streamOllamaChatWithTools } from '../services/ollama.js';
 function sseWrite(res, event, data) {
@@ -12,7 +13,7 @@ export function registerChatRoute(app) {
             reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
             return;
         }
-        const { message } = parsed.data;
+        const { message, active_player_id, active_season } = parsed.data;
         reply.hijack();
         const res = reply.raw;
         const sseHeaders = {
@@ -33,7 +34,11 @@ export function registerChatRoute(app) {
             }
             res.writeHead(200, sseHeaders);
             const pool = getPool();
-            await streamOllamaChatWithTools(pool, message, write);
+            await runWithChatQueryLog(req.log, async () => streamOllamaChatWithTools(pool, message, write, req.log, {
+                traceId: req.id,
+                active_player_id: active_player_id ?? undefined,
+                active_season: active_season ?? undefined,
+            }));
             write('done', {});
         }
         catch (e) {

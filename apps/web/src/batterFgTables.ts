@@ -5,6 +5,8 @@
 
 export type BattingCardLine = {
   seasonLabel: string;
+  /** FanGraphs team(s) for this MLB season row (from `fg_batting_season_current`). */
+  teamAbbr: string | null;
   games: number;
   pa: number;
   ab: number | null;
@@ -22,6 +24,7 @@ export type BattingCardLine = {
 };
 
 export const BATTING_CARD_HEADERS: { key: keyof Omit<BattingCardLine, 'seasonLabel'>; label: string }[] = [
+  { key: 'teamAbbr', label: 'Tm' },
   { key: 'games', label: 'G' },
   { key: 'pa', label: 'PA' },
   { key: 'ab', label: 'AB' },
@@ -43,6 +46,9 @@ export type FgBattingCardApi = {
   seasons: Record<string, unknown>[];
   max_season?: number | null;
   has_row_for_season?: boolean | null;
+  /** JAWS-style fWAR metric from API; null when absent. */
+  jaws_fwar?: number | null;
+  peak_war_fwar?: number | null;
 };
 
 /** Must stay in sync with API `last_seasons` max (`apps/api/src/routes/players.ts`). */
@@ -58,12 +64,21 @@ export function normalizeFgCardPayload(payload: unknown): FgBattingCardApi {
     seasons: Array.isArray(p.seasons) ? p.seasons : [],
     max_season: p.max_season ?? null,
     has_row_for_season: p.has_row_for_season ?? null,
+    jaws_fwar: p.jaws_fwar ?? null,
+    peak_war_fwar: p.peak_war_fwar ?? null,
   };
 }
 
 /** True if consolidated seasons include MLB data for this calendar year (replaces API `for_season` when omitted). */
 export function fgSeasonHasConsolidatedRow(seasons: Record<string, unknown>[], year: number): boolean {
   return seasons.some((s) => Number(s.season) === year);
+}
+
+/** FanGraphs MLB season row matches the card selector; never true for the Career row. */
+export function fgCardSeasonRowIsSelected(seasonLabel: string, selectedSeason: number | undefined): boolean {
+  if (selectedSeason === undefined || seasonLabel === 'Career') return false;
+  const y = Number(seasonLabel);
+  return Number.isFinite(y) && y === selectedSeason;
 }
 
 function num(v: unknown): number | null {
@@ -80,6 +95,7 @@ function nn(v: unknown, fallback = 0): number {
 export function mapCareerViewToBattingLine(c: Record<string, unknown>): BattingCardLine {
   return {
     seasonLabel: 'Career',
+    teamAbbr: null,
     games: nn(c.career_games),
     pa: nn(c.career_pa),
     ab: num(c.career_ab),
@@ -122,8 +138,12 @@ export function mapConsolidatedSeasonToBattingLine(s: Record<string, unknown>): 
   const avg = h != null && ab != null && ab > 0 ? h / ab : null;
   const ops = obp != null && slg != null ? obp + slg : null;
 
+  const td = s.team_display;
+  const teamAbbr =
+    typeof td === 'string' && td.trim() !== '' ? td.trim() : null;
   return {
     seasonLabel: String(s.season ?? ''),
+    teamAbbr,
     games: nn(s.games),
     pa,
     ab,
@@ -152,9 +172,14 @@ export function battingCardLinesFromCareerViews(api: FgBattingCardApi): {
 
 export function formatBattingCardCell(
   key: keyof Omit<BattingCardLine, 'seasonLabel'>,
-  value: number | null
+  value: string | number | null
 ): string {
+  if (key === 'teamAbbr') {
+    if (value == null || value === '') return '—';
+    return String(value);
+  }
   if (value == null || (typeof value === 'number' && !Number.isFinite(value))) return '—';
+  const n = value as number;
   if (
     key === 'games' ||
     key === 'pa' ||
@@ -165,10 +190,10 @@ export function formatBattingCardCell(
     key === 'rbi' ||
     key === 'sb'
   ) {
-    return String(Math.round(value));
+    return String(Math.round(n));
   }
-  if (key === 'avg' || key === 'obp' || key === 'slg' || key === 'ops') return value.toFixed(3);
-  if (key === 'wrcPlus') return value.toFixed(0);
-  if (key === 'fwar') return value.toFixed(1);
+  if (key === 'avg' || key === 'obp' || key === 'slg' || key === 'ops') return n.toFixed(3);
+  if (key === 'wrcPlus') return n.toFixed(0);
+  if (key === 'fwar') return n.toFixed(1);
   return String(value);
 }

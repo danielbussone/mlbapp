@@ -83,15 +83,21 @@ export const comparePlayersCareerArgsSchema = z.object({
 });
 export const statcastPitcherPitchMixArgsSchema = z.object({
     pitcher_mlbam: z.coerce.number().int().positive(),
-    game_year: z.coerce.number().int().min(2010).max(2030),
+    game_year: z.coerce.number().int().min(2010).max(2032),
 });
 export const statcastBatterBattedBallArgsSchema = z.object({
     batter_mlbam: z.coerce.number().int().positive(),
-    game_year: z.coerce.number().int().min(2010).max(2030),
+    game_year: z.coerce.number().int().min(2010).max(2032),
 });
 export const statcastSampleRowsArgsSchema = z.object({
     role: z.enum(['pitcher', 'batter']),
     mlbam: z.coerce.number().int().positive(),
-    game_year: z.coerce.number().int().min(2010).max(2030),
+    game_year: z.coerce.number().int().min(2010).max(2032),
     limit: z.number().int().min(1).max(200).nullable().optional(),
+});
+export const statcastCompareStatcastArgsSchema = z.object({
+    player_a_query: z.string().min(1).max(200),
+    player_b_query: z.string().min(1).max(200),
+    game_year: z.coerce.number().int().min(2010).max(2032),
+    role: z.enum(['pitcher', 'batter']).optional(),
 });

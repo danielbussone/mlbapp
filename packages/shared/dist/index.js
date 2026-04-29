@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export { extractExplicitSeasonYearFromMessage, extractPlayerCardChatIntentFromMessage, inferPlayerNameQueryFromUserMessageShared, PLAYER_CHAT_SEASON_YEAR_MAX, stripPossessiveRoleSuffixFromName, } from './playerChatIntent.js';
 /** API GET /health */
 export const healthResponseSchema = z.object({
     ok: z.literal(true),
@@ -9,6 +10,10 @@ export const healthResponseSchema = z.object({
 export const chatRequestSchema = z.object({
     message: z.string().default(''),
     conversationId: z.string().optional(),
+    /** When set, the user has this player's card open in the UI; model should prefer this identity. */
+    active_player_id: z.coerce.number().int().positive().optional(),
+    /** Season year shown on the card (optional; host may default). */
+    active_season: z.coerce.number().int().min(1900).max(2100).optional(),
 });
 /** SSE `data:` payloads (event name is separate in SSE wire format) */
 export const tokenEventDataSchema = z.object({

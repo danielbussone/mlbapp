@@ -9,6 +9,7 @@ import Paper from '@mui/material/Paper';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { healthResponseSchema } from '@mlbapp/shared';
 import { getDefaultCardSeasonYear } from './cardSeasonYear.js';
 import { extractCompareChatIntent, extractPlayerCardChatIntent } from './chatPlayerQuery.js';
@@ -23,6 +24,28 @@ interface ChatLine {
   text: string;
 }
 
+type NamedPlayerCandidate = {
+  player_id?: unknown;
+  name_first?: unknown;
+  name_last?: unknown;
+  birth_date?: unknown;
+  /** FanGraphs-backed line from API, e.g. “14 seasons with SEA and NYY”. */
+  career_hint?: unknown;
+};
+
+function candidateDisambiguationLabel(c: NamedPlayerCandidate): string {
+  const name = `${String(c.name_first ?? '').trim()} ${String(c.name_last ?? '').trim()}`.trim();
+  const hint =
+    typeof c.career_hint === 'string' && c.career_hint.trim() !== '' ? c.career_hint.trim() : null;
+  const b = c.birth_date != null && String(c.birth_date).trim() !== '' ? `b. ${String(c.birth_date)}` : '';
+  const parts = [name, hint, b].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function parseNamedResponse(j: unknown): Record<string, unknown> {
+  return j && typeof j === 'object' ? (j as Record<string, unknown>) : {};
+}
+
 export function App() {
   const [apiOk, setApiOk] = useState<boolean | null>(null);
   const [input, setInput] = useState('');
@@ -33,10 +56,14 @@ export function App() {
   const [sidebarPlayerId, setSidebarPlayerId] = useState<number | null>(null);
   const [sidebarExplicitSeason, setSidebarExplicitSeason] = useState<number | null>(null);
   const [sidebarResolveError, setSidebarResolveError] = useState<string | null>(null);
+  const [namePickCandidates, setNamePickCandidates] = useState<NamedPlayerCandidate[] | null>(null);
+  const [pendingCardExplicitSeason, setPendingCardExplicitSeason] = useState<number | null>(null);
   /** Two-player compare sidebar (FanGraphs career or Statcast). */
   const [compareIds, setCompareIds] = useState<[number, number] | null>(null);
   const [compareMode, setCompareMode] = useState<'career' | 'statcast'>('career');
   const [compareYear, setCompareYear] = useState(() => getDefaultCardSeasonYear());
+  /** When set with career compare, sidebar loads FanGraphs rows for this season only. */
+  const [compareFgSeason, setCompareFgSeason] = useState<number | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -61,13 +88,16 @@ export function App() {
       setSidebarExplicitSeason(null);
       setCompareIds(null);
       setSidebarResolveError(null);
+      setNamePickCandidates(null);
+      setPendingCardExplicitSeason(null);
+      setCompareFgSeason(null);
       void (async () => {
         try {
           const resolveName = async (nameQuery: string) => {
             const q = new URLSearchParams({ name_query: nameQuery });
             const r = await fetch(`/api/players/named?${q.toString()}`);
             const j: unknown = await r.json().catch(() => null);
-            const rec = j && typeof j === 'object' ? (j as Record<string, unknown>) : {};
+            const rec = parseNamedResponse(j);
             const pid = rec.player_id;
             if (r.ok && typeof pid === 'number' && Number.isFinite(pid)) return Math.trunc(pid);
             const err =
@@ -82,20 +112,23 @@ export function App() {
           const b = await resolveName(cmp.playerBQuery);
           setCompareMode(cmp.mode);
           setCompareYear(cmp.explicitSeason ?? getDefaultCardSeasonYear());
+          setCompareFgSeason(cmp.explicitSeason ?? null);
           setCompareIds([a, b]);
           setSidebarResolveError(null);
         } catch (e) {
           setCompareIds(null);
+          setCompareFgSeason(null);
           setSidebarResolveError(e instanceof Error ? e.message : 'Compare lookup failed');
         }
       })();
     } else {
       setCompareIds(null);
+      setCompareFgSeason(null);
       const cardIntent = extractPlayerCardChatIntent(msg);
       if (!cardIntent) {
-        setSidebarPlayerId(null);
-        setSidebarExplicitSeason(null);
         setSidebarResolveError(null);
+        setNamePickCandidates(null);
+        setPendingCardExplicitSeason(null);
       } else {
         setSidebarResolveError(null);
         void (async () => {
@@ -103,15 +136,43 @@ export function App() {
             const q = new URLSearchParams({ name_query: cardIntent.nameQuery });
             const r = await fetch(`/api/players/named?${q.toString()}`);
             const j: unknown = await r.json().catch(() => null);
-            const rec = j && typeof j === 'object' ? (j as Record<string, unknown>) : {};
+            const rec = parseNamedResponse(j);
             const pid = rec.player_id;
             if (r.ok && typeof pid === 'number' && Number.isFinite(pid)) {
               setSidebarPlayerId(Math.trunc(pid));
               setSidebarExplicitSeason(cardIntent.explicitSeason);
               setSidebarResolveError(null);
+              setNamePickCandidates(null);
+              setPendingCardExplicitSeason(null);
+            } else if (r.status === 409) {
+              const raw = rec.candidates;
+              const candidates = Array.isArray(raw)
+                ? (raw as NamedPlayerCandidate[]).filter(
+                    (c) => c != null && typeof c === 'object' && c.player_id != null
+                  )
+                : [];
+              if (candidates.length > 0) {
+                setSidebarPlayerId(null);
+                setSidebarExplicitSeason(null);
+                setNamePickCandidates(candidates);
+                setPendingCardExplicitSeason(cardIntent.explicitSeason);
+                setSidebarResolveError(null);
+              } else {
+                setSidebarPlayerId(null);
+                setSidebarExplicitSeason(null);
+                setNamePickCandidates(null);
+                setPendingCardExplicitSeason(null);
+                const err =
+                  typeof rec.error === 'string'
+                    ? rec.error
+                    : 'Multiple matches; no candidate list returned';
+                setSidebarResolveError(err);
+              }
             } else {
               setSidebarPlayerId(null);
               setSidebarExplicitSeason(null);
+              setNamePickCandidates(null);
+              setPendingCardExplicitSeason(null);
               const err =
                 typeof rec.error === 'string'
                   ? rec.error
@@ -123,6 +184,8 @@ export function App() {
           } catch {
             setSidebarPlayerId(null);
             setSidebarExplicitSeason(null);
+            setNamePickCandidates(null);
+            setPendingCardExplicitSeason(null);
             setSidebarResolveError('Player lookup failed (network)');
           }
         })();
@@ -135,11 +198,18 @@ export function App() {
 
     setLines((prev) => [...prev, { role: 'assistant', text: '' }]);
 
+    const activeSeasonForChat =
+      sidebarPlayerId != null ? (sidebarExplicitSeason ?? getDefaultCardSeasonYear()) : undefined;
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
+        body: JSON.stringify({
+          message: msg,
+          ...(sidebarPlayerId != null ? { active_player_id: sidebarPlayerId } : {}),
+          ...(activeSeasonForChat != null ? { active_season: activeSeasonForChat } : {}),
+        }),
       });
       const sse = res.headers.get('content-type')?.includes('text/event-stream');
       if (!res.ok && !sse) {
@@ -167,7 +237,7 @@ export function App() {
     } finally {
       setStreaming(false);
     }
-  }, [input, streaming]);
+  }, [input, streaming, sidebarPlayerId, sidebarExplicitSeason]);
 
   const defaultCardSeason =
     sidebarExplicitSeason ?? getDefaultCardSeasonYear();
@@ -179,8 +249,16 @@ export function App() {
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Local baseball chat — SSE streaming from first boot. Start Postgres + Ollama with{' '}
-        <code>docker compose up -d db ollama</code>, pull a model, then chat. Ask “Tell me about …” or “Who is …” to
-        open the player card beside the thread.
+        <code>docker compose up -d db ollama</code>, pull a model, then chat. Type a player name, “Tell me about …”,
+        “Talk about …”, or “Who is …” to open the player card beside the thread.
+        {import.meta.env.DEV && (
+          <>
+            {' '}
+            <Link to="/dev/frv-prototype">FRV prototype (OF · IF · 1B · C)</Link>
+            {' · '}
+            <Link to="/dev/oaa-breakdown-prototype">OAA breakdown (OF + IF)</Link>
+          </>
+        )}
       </Typography>
 
       <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -193,6 +271,49 @@ export function App() {
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
+        </Alert>
+      )}
+
+      {namePickCandidates != null && namePickCandidates.length > 0 && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          onClose={() => {
+            setNamePickCandidates(null);
+            setPendingCardExplicitSeason(null);
+          }}
+        >
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Multiple players match. Pick one for the card:
+          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            {namePickCandidates.map((c) => {
+              const rawId = c.player_id;
+              const id =
+                typeof rawId === 'number' && Number.isFinite(rawId)
+                  ? Math.trunc(rawId)
+                  : typeof rawId === 'string' && /^\d+$/.test(rawId)
+                    ? parseInt(rawId, 10)
+                    : NaN;
+              if (!Number.isFinite(id)) return null;
+              const label = candidateDisambiguationLabel(c);
+              return (
+                <Button
+                  key={id}
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    setSidebarPlayerId(id);
+                    setSidebarExplicitSeason(pendingCardExplicitSeason);
+                    setNamePickCandidates(null);
+                    setPendingCardExplicitSeason(null);
+                  }}
+                >
+                  {label || `player_id ${id}`}
+                </Button>
+              );
+            })}
+          </Box>
         </Alert>
       )}
 
@@ -237,7 +358,11 @@ export function App() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send();
+                if (e.key !== 'Enter') return;
+                if (e.shiftKey) return;
+                if (e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                if (!streaming && input.trim()) void send();
               }}
               placeholder="Ask about players or stats…"
               disabled={streaming}
@@ -253,7 +378,7 @@ export function App() {
             </Button>
           </Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            Cmd/Ctrl+Enter to send
+            Enter to send · Shift+Enter for a new line · Cmd/Ctrl+Enter also sends
           </Typography>
         </Box>
 
@@ -272,8 +397,10 @@ export function App() {
               playerIds={compareIds}
               mode={compareMode}
               gameYear={compareYear}
+              compareFgSeason={compareFgSeason}
               onClose={() => {
                 setCompareIds(null);
+                setCompareFgSeason(null);
                 setSidebarResolveError(null);
               }}
             />

@@ -7,10 +7,11 @@ export function inferTwoPlayerCompareFromUserMessage(
 ): { player_a_query: string; player_b_query: string } | null {
   const t = msg.trim();
   if (!t) return null;
-  const re = /\bcompare\s+(.+?)\s+and\s+(.+)$/is;
-  const m = t.match(re);
-  if (!m) return null;
   const stripTrail = (s: string) => s.trim().replace(/[.!?]+$/g, '').trim();
+  const reCompare = /\bcompare\s+(.+?)\s+and\s+(.+?)(?:[.?!]|$)/is;
+  const reHowDo = /\bhow\s+do\s+(.+?)\s+and\s+(.+?)\s+differ\b/is;
+  const m = t.match(reCompare) ?? t.match(reHowDo);
+  if (!m) return null;
   const player_a_query = stripTrail(m[1]);
   const player_b_query = stripTrail(m[2]);
   if (player_a_query.length < 2 || player_b_query.length < 2) return null;

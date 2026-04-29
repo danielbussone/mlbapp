@@ -1,3 +1,4 @@
+import { inferExplicitSeasonYearFromUserMessage, inferPlayerNameQueryFromUserMessage } from '../lib/chatUserIntentArgs.js';
 import { normalizePlayerNameQuery } from '../lib/playerNameQuery.js';
 /** Minimal JSON parse for Ollama `function.arguments`. */
 export function parseArgs(raw) {
@@ -15,13 +16,6 @@ export function parseArgs(raw) {
         return raw;
     return {};
 }
-/** "Resolve Mike Trout and show ..." → Mike Trout */
-export function inferNameQueryFromUserMessage(msg) {
-    const r = msg.match(/\bresolve\s+(.+?)\s+\band\b/i);
-    if (r)
-        return r[1].trim();
-    return null;
-}
 function lastSuccessfulResolvePayload(messages) {
     for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
@@ -35,8 +29,9 @@ function lastSuccessfulResolvePayload(messages) {
             if (j.error)
                 continue;
             const candidates = j.candidates;
-            if (candidates?.length && candidates[0]?.player_id != null)
+            if (candidates?.length === 1 && candidates[0]?.player_id != null) {
                 return j;
+            }
         }
         catch {
             continue;
@@ -67,9 +62,9 @@ export function enrichToolArgs(name, rawArgs, ctx) {
             toPositiveInt(base.key_mlbam) != null ||
             toPositiveInt(base.id_fangraphs) != null;
         if (!has && ctx.userMessage) {
-            const q = inferNameQueryFromUserMessage(ctx.userMessage);
+            const q = inferPlayerNameQueryFromUserMessage(ctx.userMessage);
             if (q)
-                return { ...base, name_query: normalizePlayerNameQuery(q) };
+                return { ...base, name_query: q };
         }
         return base;
     }
@@ -81,7 +76,7 @@ export function enrichToolArgs(name, rawArgs, ctx) {
         if (resolved != null && got !== resolved) {
             base.player_id = resolved;
         }
-        else if (got == null && r?.candidates?.[0]?.player_id != null) {
+        else if (got == null && r?.candidates?.length === 1 && r.candidates[0]?.player_id != null) {
             const n = toPositiveInt(r.candidates[0].player_id);
             if (n != null)
                 base.player_id = n;
@@ -91,6 +86,18 @@ export function enrichToolArgs(name, rawArgs, ctx) {
             if (typeof v === 'string' && /^\d{4}$/.test(v.trim())) {
                 base[k] = parseInt(v.trim(), 10);
             }
+        }
+        const explicitY = inferExplicitSeasonYearFromUserMessage(ctx.userMessage);
+        if (explicitY != null) {
+            base.season = explicitY;
+            delete base.season_from;
+            delete base.season_to;
+        }
+        else {
+            if (base.season == null || base.season === '')
+                delete base.season;
+            delete base.season_from;
+            delete base.season_to;
         }
         return base;
     }
@@ -104,11 +111,42 @@ export function enrichToolArgs(name, rawArgs, ctx) {
         if (typeof base.game_year === 'string' && /^\d{4}$/.test(base.game_year.trim())) {
             base.game_year = parseInt(base.game_year.trim(), 10);
         }
+        const r = lastSuccessfulResolvePayload(ctx.messages);
+        const mlbam = r?.candidates?.length === 1
+            ? r.candidates[0]?.key_mlbam
+            : undefined;
+        const mGot = toPositiveInt(base.batter_mlbam);
+        const mResolved = toPositiveInt(mlbam);
+        if (mResolved != null && mGot !== mResolved) {
+            base.batter_mlbam = mResolved;
+        }
+        else if (mGot == null && mResolved != null) {
+            base.batter_mlbam = mResolved;
+        }
+        const explicitY = inferExplicitSeasonYearFromUserMessage(ctx.userMessage);
+        const cy = new Date().getFullYear();
+        base.game_year = explicitY != null ? explicitY : Math.min(2032, Math.max(2010, cy));
         return base;
     }
     if (name === 'statcast_sample_rows') {
         if (typeof base.game_year === 'string' && /^\d{4}$/.test(base.game_year.trim())) {
             base.game_year = parseInt(base.game_year.trim(), 10);
+        }
+        const r = lastSuccessfulResolvePayload(ctx.messages);
+        const cand0 = r?.candidates?.length === 1 ? r.candidates[0] : undefined;
+        const mlbam = cand0?.key_mlbam;
+        const mGot = toPositiveInt(base.mlbam);
+        const mResolved = toPositiveInt(mlbam);
+        if (base.role === 'batter') {
+            if (mResolved != null && mGot !== mResolved) {
+                base.mlbam = mResolved;
+            }
+            else if (mGot == null && mResolved != null) {
+                base.mlbam = mResolved;
+            }
+            const explicitY = inferExplicitSeasonYearFromUserMessage(ctx.userMessage);
+            const cy = new Date().getFullYear();
+            base.game_year = explicitY != null ? explicitY : Math.min(2032, Math.max(2010, cy));
         }
         return base;
     }

@@ -255,4 +255,10 @@ def normalize_api_fielding_df(df: pd.DataFrame) -> pd.DataFrame:
     out["Level"] = "MLB"
     if "Pos" not in out.columns and "position" in out.columns:
         out["Pos"] = out["position"]
+    # FG JSON keys drift across seasons; typed INSERT expects ``FRV`` / ``UZR``.
+    if "FRV" not in out.columns:
+        for alt in ("Statcast FRV", "FldRV", "Fld"):
+            if alt in out.columns:
+                out["FRV"] = out[alt]
+                break
     return out

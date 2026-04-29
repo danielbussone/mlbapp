@@ -468,6 +468,45 @@ REFRESH MATERIALIZED VIEW statcast_league_pitch_movement_rollup;
 
 See materialized view [`V14__statcast_league_movement_fg_fielding_oaa.sql`](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql).
 
+**Directional OAA grid** (`pnpm etl:fielding-oaa` → `savant_fielding_oaa_cell` — [STATCAST_REQUIREMENTS.md](./STATCAST_REQUIREMENTS.md) §11). Spot-check coverage:
+
+```sql
+SELECT game_year,
+       COUNT(DISTINCT player_mlbam) AS players,
+       COUNT(*)::bigint / NULLIF(COUNT(DISTINCT player_mlbam), 0) AS cells_per_player_avg
+FROM savant_fielding_oaa_cell
+WHERE cell_id LIKE 'of_dir_%'
+GROUP BY game_year
+ORDER BY game_year DESC;
+```
+
+**Refresh league percentile MVs** (after large Statcast ingest; see [COHORT_PERCENTILES_SPEC.md](./COHORT_PERCENTILES_SPEC.md)):
+
+```bash
+pnpm db:refresh-percentiles
+```
+
+This script sources repo-root **`.env`** so `DATABASE_URL` is set (same pattern as the API). If you run `psql` yourself, export `DATABASE_URL` first — e.g. `postgresql://mlbapp:mlbapp@localhost:5433/mlbapp` when using Compose (`docker-compose.yml` maps host **5433** → container 5432).
+
+Equivalent SQL is in [`../scripts/refresh-statcast-percentile-mvs.sql`](../scripts/refresh-statcast-percentile-mvs.sql). Flyway: [`V15__statcast_league_percentile_mvs.sql`](../db/sql/V15__statcast_league_percentile_mvs.sql) (core sliders), [`V16__statcast_savant_bip_sprint.sql`](../db/sql/V16__statcast_savant_bip_sprint.sql) (Savant BIP MVs + `player_season_sprint_speed`), [`V17__fg_pitching_season_mlb_merged_stats_view.sql`](../db/sql/V17__fg_pitching_season_mlb_merged_stats_view.sql) (FG xERA merge view), [`V18__statcast_pitcher_totals_mv_value_columns.sql`](../db/sql/V18__statcast_pitcher_totals_mv_value_columns.sql) (pitcher totals MV exposes `val_*` rate columns for the API), [`V19__fg_batting_season_mlb_merged_rates_view.sql`](../db/sql/V19__fg_batting_season_mlb_merged_rates_view.sql) (FG batting typed-rate merge view for percentiles), [`V20__fg_merge_views_resolve_player_via_external_id.sql`](../db/sql/V20__fg_merge_views_resolve_player_via_external_id.sql) (FG merge views join `dim_player` via FanGraphs external id when `player_id` is null on FG rows), [`V21__player_season_running_splits.sql`](../db/sql/V21__player_season_running_splits.sql) (optional 90 ft splits jsonb; `pnpm etl:sprint`).
+
+**Savant / expected-stat key audit** (same as [COHORT_PERCENTILES_SPEC.md](./COHORT_PERCENTILES_SPEC.md) §payload audit):
+
+```sql
+SELECT k, COUNT(*) AS rows_with_key
+FROM statcast_pitch s,
+     LATERAL jsonb_object_keys(s.payload_jsonb) AS t(k)
+WHERE s.game_year = 2024
+  AND k IN (
+    'estimated_ba_using_speedangle',
+    'estimated_slg_using_speedangle',
+    'estimated_woba_using_speedangle',
+    'launch_speed_angle'
+  )
+GROUP BY k
+ORDER BY rows_with_key DESC;
+```
+
 ---
 
 ## Statcast: recent ingest snapshots

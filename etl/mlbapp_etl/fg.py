@@ -265,7 +265,7 @@ def _fielding_row(snapshot_id: uuid.UUID, row: Any) -> dict[str, Any]:
         "drs": as_numeric(pick(row, "DRS"), 2),
         "uzr": as_numeric(pick(row, "UZR"), 2),
         "oaa": as_numeric(pick(row, "OAA"), 2),
-        "frv": as_numeric(pick(row, "FRV"), 2),
+        "frv": as_numeric(pick(row, "FRV", "Statcast FRV", "FldRV", "Fld"), 2),
         "war": as_numeric(pick(row, "WAR"), 2),
         "stats_jsonb": stats_jsonb,
     }

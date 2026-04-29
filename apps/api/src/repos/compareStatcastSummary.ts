@@ -3,8 +3,10 @@ import {
   clampGameYear,
   statcastBatterBatPathSummary,
   statcastBatterBattedBall,
+  statcastLeagueAvgVeloByPitchType,
   statcastPitcherPitchMix,
   statcastPitcherPitchMixExtended,
+  statcastPitcherPitchMixExtendedByBatterStand,
   statcastPitcherThrowsHand,
   statcastPitcherVeloHistogram,
   statcastSampleRows,
@@ -64,16 +66,21 @@ export async function compareStatcastSummary(
     };
 
     if (input.role === 'pitcher') {
-      const [mixRows, mixExt, veloHist, sampleRows, pitcherThrows] = await Promise.all([
-        statcastPitcherPitchMix(pool, mlbam, y),
-        enhanced ? statcastPitcherPitchMixExtended(pool, mlbam, y) : Promise.resolve(undefined),
-        enhanced ? statcastPitcherVeloHistogram(pool, mlbam, y) : Promise.resolve(undefined),
-        statcastSampleRows(pool, { role: 'pitcher', mlbam, game_year: y, limit: 2000 }),
-        statcastPitcherThrowsHand(pool, mlbam, y),
-      ]);
+      const [mixRows, mixExt, mixExtByStand, veloHist, leagueVeloByPt, sampleRows, pitcherThrows] =
+        await Promise.all([
+          statcastPitcherPitchMix(pool, mlbam, y),
+          enhanced ? statcastPitcherPitchMixExtended(pool, mlbam, y) : Promise.resolve(undefined),
+          enhanced ? statcastPitcherPitchMixExtendedByBatterStand(pool, mlbam, y) : Promise.resolve(undefined),
+          enhanced ? statcastPitcherVeloHistogram(pool, mlbam, y) : Promise.resolve(undefined),
+          enhanced ? statcastLeagueAvgVeloByPitchType(pool, y) : Promise.resolve(undefined),
+          statcastSampleRows(pool, { role: 'pitcher', mlbam, game_year: y, limit: 2000 }),
+          statcastPitcherThrowsHand(pool, mlbam, y),
+        ]);
       out.mix = mixRows;
       if (mixExt !== undefined) out.mix_extended = mixExt;
+      if (mixExtByStand !== undefined) out.mix_extended_by_stand = mixExtByStand;
       if (veloHist !== undefined) out.velo_dist = veloHist;
+      if (leagueVeloByPt !== undefined) out.league_avg_velo_by_pitch = leagueVeloByPt;
       out.sample = sampleRows;
       if (pitcherThrows != null) out.pitcher_throws = pitcherThrows;
       const hasData = statcastSummaryHasRenderableData('pitcher', out, {
@@ -91,7 +98,9 @@ export async function compareStatcastSummary(
         delete out.mix;
         delete out.sample;
         delete out.mix_extended;
+        delete out.mix_extended_by_stand;
         delete out.velo_dist;
+        delete out.league_avg_velo_by_pitch;
         delete out.pitcher_throws;
       }
     } else {

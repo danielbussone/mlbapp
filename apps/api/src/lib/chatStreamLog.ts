@@ -241,7 +241,13 @@ export function logOllamaRoundResponse(
 export function logToolRun(
   log: ChatStreamLogger | undefined,
   ctx: {
-    source: 'model' | 'server_fg_fallback' | 'server_compare_inject';
+    source:
+      | 'model'
+      | 'server_fg_fallback'
+      | 'server_compare_inject'
+      | 'server_resolve_inject'
+      | 'server_active_resolve'
+      | 'server_statcast_inject';
     name: string;
     args: unknown;
     resultJson: string;

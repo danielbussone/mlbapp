@@ -2,7 +2,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { useEffect, useMemo, useState } from 'react';
 
-type Row = { game_year: number; player_avg_bat_speed?: unknown };
+type Row = { game_year: number; player_avg_bat_speed?: unknown; league_avg_bat_speed?: unknown };
 
 function num(v: unknown): number | null {
   if (v == null || v === '') return null;
@@ -10,17 +10,20 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Fetches yearly bat-path summary and draws a simple mph sparkline across seasons. */
+/** Fetches yearly bat-path summary and draws mph sparkline + league reference + y-axis ticks. */
 export function BatSpeedSeasonSpark({
   playerId,
   season,
   fromYear,
+  showLeagueAxis = true,
 }: {
   playerId: number;
   /** Current card season (spark runs up to this year). */
   season: number;
   /** Earliest season on the chart (inclusive). */
   fromYear: number;
+  /** Taller chart with left mph ticks (default true). */
+  showLeagueAxis?: boolean;
 }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -56,31 +59,52 @@ export function BatSpeedSeasonSpark({
     };
   }, [playerId, season, fromYear]);
 
-  const pts = useMemo(() => {
-    const out: { x: number; y: number; yv: number }[] = [];
+  const { pts, leaguePts } = useMemo(() => {
+    const out: { x: number; yv: number }[] = [];
+    const lg: { x: number; yv: number }[] = [];
     for (const r of rows) {
       const yv = num(r.player_avg_bat_speed);
-      if (yv == null) continue;
-      out.push({ x: r.game_year, y: yv, yv });
+      const lv = num(r.league_avg_bat_speed);
+      if (yv != null) out.push({ x: r.game_year, yv });
+      if (lv != null) lg.push({ x: r.game_year, yv: lv });
     }
-    return out.sort((a, b) => a.x - b.x);
+    out.sort((a, b) => a.x - b.x);
+    lg.sort((a, b) => a.x - b.x);
+    return { pts: out, leaguePts: lg };
   }, [rows]);
 
   if (err || pts.length === 0) return null;
 
-  const minX = pts[0]!.x;
-  const maxX = pts[pts.length - 1]!.x;
-  const speeds = pts.map((p) => p.yv);
-  const minY = Math.min(...speeds) - 1;
-  const maxY = Math.max(...speeds) + 1;
-  const W = 280;
-  const H = 72;
-  const pad = 8;
+  const firstPt = pts[0];
+  const lastPt = pts[pts.length - 1];
+  const minX = firstPt.x;
+  const maxX = lastPt.x;
+  const allY = [...pts.map((p) => p.yv), ...leaguePts.map((p) => p.yv)];
+  const minY = Math.floor(Math.min(...allY) - 1);
+  const maxY = Math.ceil(Math.max(...allY) + 1);
 
-  const sx = (gx: number) => pad + ((gx - minX) / (maxX - minX || 1)) * (W - 2 * pad);
-  const sy = (gy: number) => H - pad - ((gy - minY) / (maxY - minY || 1)) * (H - 2 * pad);
+  const W = showLeagueAxis ? 300 : 280;
+  const H = showLeagueAxis ? 100 : 72;
+  const padL = showLeagueAxis ? 34 : 8;
+  const padR = 8;
+  const padT = 8;
+  const padB = showLeagueAxis ? 22 : 8;
 
-  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.yv)}`).join(' ');
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const sx = (gx: number) => padL + ((gx - minX) / (maxX - minX || 1)) * plotW;
+  const sy = (gy: number) => padT + plotH - ((gy - minY) / (maxY - minY || 1)) * plotH;
+
+  const dPlayer = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.yv)}`).join(' ');
+  const dLeague =
+    leaguePts.length > 0
+      ? leaguePts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.yv)}`).join(' ')
+      : '';
+
+  const yTicks: number[] = [];
+  const step = maxY - minY <= 6 ? 1 : 2;
+  for (let t = minY; t <= maxY; t += step) yTicks.push(t);
 
   return (
     <Box sx={{ mt: 1 }}>
@@ -88,13 +112,57 @@ export function BatSpeedSeasonSpark({
         Bat speed by season
       </Typography>
       <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}>
-        <path d={d} fill="none" stroke="#00838f" strokeWidth={1.5} />
+        {showLeagueAxis &&
+          yTicks.map((mph) => (
+            <g key={mph}>
+              <line
+                x1={padL}
+                x2={W - padR}
+                y1={sy(mph)}
+                y2={sy(mph)}
+                stroke="#e0e0e0"
+                strokeDasharray="4 3"
+                strokeWidth={0.75}
+              />
+              <text x={padL - 4} y={sy(mph)} textAnchor="end" dominantBaseline="middle" fontSize="9" fill="#757575">
+                {mph}
+              </text>
+            </g>
+          ))}
+        {dLeague && (
+          <path
+            d={dLeague}
+            fill="none"
+            stroke="#9e9e9e"
+            strokeWidth={1.25}
+            strokeDasharray="4 3"
+            opacity={0.95}
+          />
+        )}
+        <path d={dPlayer} fill="none" stroke="#00838f" strokeWidth={1.75} />
         {pts.map((p) => (
-          <circle key={p.x} cx={sx(p.x)} cy={sy(p.yv)} r={2.5} fill="#00838f" />
+          <circle key={p.x} cx={sx(p.x)} cy={sy(p.yv)} r={3} fill="#00838f" />
         ))}
+        {showLeagueAxis && (
+          <text x={padL + plotW / 2} y={H - 4} textAnchor="middle" fontSize="9" fill="#757575">
+            Season
+          </text>
+        )}
+        {showLeagueAxis && (
+          <text
+            x={4}
+            y={padT + plotH / 2}
+            textAnchor="middle"
+            fontSize="9"
+            fill="#757575"
+            transform={`rotate(-90 4 ${padT + plotH / 2})`}
+          >
+            mph
+          </text>
+        )}
       </svg>
-      <Typography variant="caption" color="text.secondary">
-        Avg bat speed (mph) where Hawk-Eye tracked swings exist per year.
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+        Teal: player avg bat speed where tracked. Gray dashed: league avg (same season, all bat-tracked swings).
       </Typography>
     </Box>
   );

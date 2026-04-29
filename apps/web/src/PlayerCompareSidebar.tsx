@@ -22,15 +22,27 @@ function fmt(v: unknown): string {
   return String(v);
 }
 
+function pickPrimarySeasonRow(rows: Record<string, unknown>[]): Record<string, unknown> | null {
+  if (!rows.length) return null;
+  return rows.reduce((a, b) => {
+    const pa = Number(a.pa ?? a.ip ?? 0);
+    const pb = Number(b.pa ?? b.ip ?? 0);
+    return pb > pa ? b : a;
+  });
+}
+
 export function PlayerCompareSidebar({
   playerIds,
   mode,
   gameYear,
+  compareFgSeason,
   onClose,
 }: {
   playerIds: [number, number];
   mode: 'career' | 'statcast';
   gameYear: number;
+  /** When set with `mode === 'career'`, load single-season FanGraphs slice instead of career totals. */
+  compareFgSeason?: number | null;
   onClose: () => void;
 }) {
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
@@ -41,6 +53,9 @@ export function PlayerCompareSidebar({
     void (async () => {
       try {
         const q = new URLSearchParams({ player_ids: `${playerIds[0]},${playerIds[1]}` });
+        if (mode === 'career' && compareFgSeason != null && compareFgSeason > 0) {
+          q.set('season', String(compareFgSeason));
+        }
         const path =
           mode === 'career'
             ? `/api/players/compare/fg-career?${q}`
@@ -62,15 +77,26 @@ export function PlayerCompareSidebar({
     return () => {
       cancelled = true;
     };
-  }, [playerIds, mode, gameYear]);
+  }, [playerIds, mode, gameYear, compareFgSeason]);
 
   const players = (payload?.players as Record<string, unknown>[] | undefined) ?? [];
+  const fgSeasonYear = (payload?.meta as { fg_season_year?: number } | undefined)?.fg_season_year;
+  const battingFgSeason = payload?.batting_fg_season as
+    | { player_id: number; rows: Record<string, unknown>[] }[]
+    | undefined;
+  const pitchingFgSeason = payload?.pitching_fg_season as
+    | { player_id: number; rows: Record<string, unknown>[] }[]
+    | undefined;
 
   return (
     <Paper variant="outlined" sx={{ p: 1.5, position: 'relative', maxHeight: '92vh', overflow: 'auto' }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          {mode === 'career' ? 'Career compare' : 'Statcast compare'}
+          {mode === 'career'
+            ? fgSeasonYear != null
+              ? `FanGraphs ${fgSeasonYear}`
+              : 'Career compare'
+            : 'Statcast compare'}
         </Typography>
         <IconButton size="small" aria-label="Close" onClick={onClose}>
           <CloseIcon fontSize="small" />
@@ -85,7 +111,74 @@ export function PlayerCompareSidebar({
         {players.map((p) => `${p.name_first} ${p.name_last}`).join(' vs ')}
         {mode === 'statcast' && ` · ${gameYear}`}
       </Typography>
-      {mode === 'career' && payload && Array.isArray(payload.batting_careers) && (
+      {mode === 'career' && fgSeasonYear != null && battingFgSeason && (
+        <Table size="small" sx={{ mb: 1 }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Stat</TableCell>
+              {players.map((p) => (
+                <TableCell key={String(p.player_id)} align="right">
+                  {String(p.name_last)}
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {(['war', 'pa', 'hr', 'avg', 'obp', 'slg'] as const).map((k) => (
+              <TableRow key={k}>
+                <TableCell sx={{ textTransform: 'uppercase', fontSize: '0.65rem' }}>{k}</TableCell>
+                {players.map((p) => {
+                  const pid = Number(p.player_id);
+                  const block = battingFgSeason.find((b) => b.player_id === pid);
+                  const row = block ? pickPrimarySeasonRow(block.rows) : null;
+                  return (
+                    <TableCell key={pid} align="right">
+                      {fmt(row?.[k])}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      {mode === 'career' && fgSeasonYear != null && pitchingFgSeason && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+          Pitching ({fgSeasonYear})
+        </Typography>
+      )}
+      {mode === 'career' && fgSeasonYear != null && pitchingFgSeason && (
+        <Table size="small" sx={{ mb: 1 }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Stat</TableCell>
+              {players.map((p) => (
+                <TableCell key={String(p.player_id)} align="right">
+                  {String(p.name_last)}
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {(['ip', 'era', 'fip', 'war', 'k_per_9', 'bb_per_9'] as const).map((k) => (
+              <TableRow key={k}>
+                <TableCell sx={{ textTransform: 'uppercase', fontSize: '0.65rem' }}>{k.replace(/_/g, '/')}</TableCell>
+                {players.map((p) => {
+                  const pid = Number(p.player_id);
+                  const block = pitchingFgSeason.find((b) => b.player_id === pid);
+                  const row = block ? pickPrimarySeasonRow(block.rows) : null;
+                  return (
+                    <TableCell key={pid} align="right">
+                      {fmt(row?.[k])}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      {mode === 'career' && fgSeasonYear == null && payload && Array.isArray(payload.batting_careers) && (
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -126,10 +219,12 @@ export function PlayerCompareSidebar({
                 <Typography variant="caption" display="block" color="text.secondary">
                   Pitches:{' '}
                   {Array.isArray(s.mix)
-                    ? (s.mix as Record<string, unknown>[]).reduce(
-                        (acc, r) => acc + Number(r.pitches ?? 0),
-                        0
-                      )
+                    ? (s.mix as Record<string, unknown>[]).reduce((acc, r) => {
+                        const raw = r.pitches;
+                        if (raw == null || raw === '') return acc;
+                        const n = typeof raw === 'number' ? raw : Number(raw);
+                        return acc + (Number.isFinite(n) ? n : 0);
+                      }, 0)
                     : 0}
                 </Typography>
               </Box>
@@ -142,7 +237,9 @@ export function PlayerCompareSidebar({
           component={RouterLink}
           to={
             mode === 'career'
-              ? `/compare/career?player_ids=${playerIds[0]},${playerIds[1]}`
+              ? `/compare/career?player_ids=${playerIds[0]},${playerIds[1]}${
+                  compareFgSeason != null && compareFgSeason > 0 ? `&season=${compareFgSeason}` : ''
+                }`
               : `/compare/statcast?player_ids=${playerIds[0]},${playerIds[1]}&role=pitcher&game_year=${gameYear}`
           }
           size="small"

@@ -9,10 +9,11 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import type { FgBattingCardApi } from './batterFgTables.js';
+import { fgCardSeasonRowIsSelected, type FgBattingCardApi } from './batterFgTables.js';
 
 export type PitchingCardLine = {
   seasonLabel: string;
+  teamAbbr: string | null;
   w: number;
   l: number;
   sv: number;
@@ -30,6 +31,7 @@ export type PitchingCardLine = {
 };
 
 export const PITCHING_CARD_HEADERS: { key: keyof Omit<PitchingCardLine, 'seasonLabel'>; label: string }[] = [
+  { key: 'teamAbbr', label: 'Tm' },
   { key: 'w', label: 'W' },
   { key: 'l', label: 'L' },
   { key: 'sv', label: 'SV' },
@@ -68,6 +70,7 @@ export function formatIpFromOuts(outs: unknown): string {
 export function mapCareerViewToPitchingLine(c: Record<string, unknown>): PitchingCardLine {
   return {
     seasonLabel: 'Career',
+    teamAbbr: null,
     w: nn(c.career_w),
     l: nn(c.career_l),
     sv: nn(c.career_sv),
@@ -86,8 +89,12 @@ export function mapCareerViewToPitchingLine(c: Record<string, unknown>): Pitchin
 }
 
 export function mapConsolidatedSeasonToPitchingLine(s: Record<string, unknown>): PitchingCardLine {
+  const td = s.team_display;
+  const teamAbbr =
+    typeof td === 'string' && td.trim() !== '' ? td.trim() : null;
   return {
     seasonLabel: String(s.season ?? ''),
+    teamAbbr,
     w: nn(s.w),
     l: nn(s.l),
     sv: nn(s.sv),
@@ -118,6 +125,10 @@ export function formatPitchingCardCell(
   key: keyof Omit<PitchingCardLine, 'seasonLabel'>,
   value: string | number | null
 ): string {
+  if (key === 'teamAbbr') {
+    if (value == null || value === '') return '—';
+    return String(value);
+  }
   if (value == null || (typeof value === 'number' && !Number.isFinite(value))) return '—';
   if (key === 'ip') return typeof value === 'string' ? value : String(value);
   if (key === 'w' || key === 'l' || key === 'sv' || key === 'games' || key === 'gs' || key === 'so' || key === 'bb') {
@@ -131,9 +142,12 @@ export function formatPitchingCardCell(
 export function PitchingCardTable({
   lines,
   variant,
+  selectedSeason,
 }: {
   lines: PitchingCardLine[];
   variant: 'page' | 'sidebar';
+  /** When set, the matching MLB season row is subtly highlighted (not Career). */
+  selectedSeason?: number;
 }) {
   if (lines.length === 0) return null;
   const fs = variant === 'sidebar' ? '0.68rem' : '0.75rem';
@@ -151,22 +165,37 @@ export function PitchingCardTable({
           </TableRow>
         </TableHead>
         <TableBody>
-          {lines.map((line) => (
-            <TableRow key={line.seasonLabel}>
-              <TableCell
-                component="th"
-                scope="row"
-                sx={{ fontWeight: line.seasonLabel === 'Career' ? 700 : 500 }}
+          {lines.map((line) => {
+            const selected = fgCardSeasonRowIsSelected(line.seasonLabel, selectedSeason);
+            return (
+              <TableRow
+                key={line.seasonLabel}
+                sx={
+                  selected
+                    ? {
+                        bgcolor: 'action.selected',
+                        borderLeft: 3,
+                        borderLeftColor: 'primary.main',
+                        '& .MuiTableCell-root': { fontWeight: 600 },
+                      }
+                    : undefined
+                }
               >
-                {line.seasonLabel}
-              </TableCell>
-              {PITCHING_CARD_HEADERS.map(({ key }) => (
-                <TableCell key={key} align="right">
-                  {formatPitchingCardCell(key, line[key])}
+                <TableCell
+                  component="th"
+                  scope="row"
+                  sx={{ fontWeight: line.seasonLabel === 'Career' ? 700 : selected ? 600 : 500 }}
+                >
+                  {line.seasonLabel}
                 </TableCell>
-              ))}
-            </TableRow>
-          ))}
+                {PITCHING_CARD_HEADERS.map(({ key }) => (
+                  <TableCell key={key} align={key === 'teamAbbr' ? 'left' : 'right'}>
+                    {formatPitchingCardCell(key, line[key])}
+                  </TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </TableContainer>

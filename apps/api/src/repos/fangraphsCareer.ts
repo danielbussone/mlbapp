@@ -1,6 +1,32 @@
 import type pg from 'pg';
 import { rowToJson, rowsToJson } from './rowJson.js';
 
+/** Reject pure-numeric FG values mis-mapped as position (e.g. rate columns under `Pos`). */
+function sanitizeFgPositionDisplay(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (/^\d+(\.\d+)?$/.test(s)) return null;
+  return s;
+}
+
+/**
+ * Pitcher header chip: SP / RP / SP·RP from FanGraphs consolidated games / games started.
+ */
+function pitcherUsageRoleLabel(gamesStarted: unknown, games: unknown): string | null {
+  const g = typeof games === 'number' ? games : Number(games);
+  const gs = typeof gamesStarted === 'number' ? gamesStarted : Number(gamesStarted);
+  if (!Number.isFinite(g) || g <= 0) return null;
+  const gsv = Number.isFinite(gs) && gs >= 0 ? gs : 0;
+  const r = gsv / g;
+  if (g >= 8 && (gsv >= 10 || r >= 0.55)) return 'SP';
+  if (g >= 15 && (gsv <= 2 || r <= 0.1)) return 'RP';
+  if (r >= 0.42 && gsv >= 3) return 'SP';
+  if (r <= 0.2 && g >= 10) return 'RP';
+  if (g >= 12) return 'SP/RP';
+  return null;
+}
+
 /** Match FG rows to dim_player by surrogate id or fangraphs external id. */
 function playerFgPredicate(alias: string): string {
   return `(
@@ -184,12 +210,195 @@ ORDER BY career_war DESC NULLS LAST, career_games DESC NULLS LAST, id_fg
 LIMIT 1
 `;
 
+/**
+ * JAWS-style peak: average fWAR of the best seven MLB seasons (fewer seasons if career shorter).
+ * Uses FanGraphs consolidated season WAR — not Baseball-Reference rWAR.
+ */
+const FG_BATTING_PEAK_WAR_SQL = `
+WITH ${fgResolvedIdFgCte('fg_batting_season_mlb_consolidated').trim()},
+top_seasons AS (
+  SELECT s.war AS war
+  FROM fg_batting_season_mlb_consolidated s
+  WHERE s.id_fg IN (SELECT id_fg FROM resolved_id_fg)
+    AND s.war IS NOT NULL
+  ORDER BY s.war DESC NULLS LAST
+  LIMIT 7
+)
+SELECT AVG(war)::double precision AS peak_war_fwar
+FROM top_seasons
+`;
+
+const FG_PITCHING_PEAK_WAR_SQL = `
+WITH ${fgResolvedIdFgCte('fg_pitching_season_mlb_consolidated').trim()},
+top_seasons AS (
+  SELECT s.war AS war
+  FROM fg_pitching_season_mlb_consolidated s
+  WHERE s.id_fg IN (SELECT id_fg FROM resolved_id_fg)
+    AND s.war IS NOT NULL
+  ORDER BY s.war DESC NULLS LAST
+  LIMIT 7
+)
+SELECT AVG(war)::double precision AS peak_war_fwar
+FROM top_seasons
+`;
+
+/** JAWS = (career WAR + peak WAR) / 2 using fWAR from consolidated FG seasons. */
+function jawsFwarFromCareerAndPeak(careerWar: unknown, peakWar: unknown): number | null {
+  const c = typeof careerWar === 'number' ? careerWar : careerWar != null ? Number(careerWar) : NaN;
+  const p = typeof peakWar === 'number' ? peakWar : peakWar != null ? Number(peakWar) : NaN;
+  if (!Number.isFinite(c) || !Number.isFinite(p)) return null;
+  return (c + p) / 2;
+}
+
 export type FgBattingCardPayload = {
   career: Record<string, unknown> | null;
   seasons: Record<string, unknown>[];
   max_season: number | null;
   has_row_for_season: boolean | null;
+  /** JAWS-style metric using FanGraphs WAR; differs from Baseball-Reference JAWS (rWAR). */
+  jaws_fwar: number | null;
+  /** Average fWAR of best seven seasons (same basis as `jaws_fwar`). */
+  peak_war_fwar: number | null;
 };
+
+/** MLB team + primary position label per season from `fg_*_season_current` (not on consolidated MV). */
+async function fgBattingSeasonDisplayBySeason(
+  pool: pg.Pool,
+  playerId: number
+): Promise<Map<number, { team_display: string; position_display: string | null }>> {
+  const { rows } = await pool.query(
+    `
+    SELECT b.season::integer AS season, b.team
+    FROM fg_batting_season_current b
+    WHERE ${playerFgPredicate('b')} AND b.level = 'MLB'
+    `,
+    [playerId]
+  );
+  const teamsBySeason = new Map<number, Set<string>>();
+  for (const r of rows as { season: number; team: string }[]) {
+    const se = Number(r.season);
+    const t = String(r.team ?? '').trim();
+    if (!Number.isFinite(se) || !t) continue;
+    let set = teamsBySeason.get(se);
+    if (!set) {
+      set = new Set();
+      teamsBySeason.set(se, set);
+    }
+    set.add(t);
+  }
+  const teamLabel = (se: number): string => {
+    const set = teamsBySeason.get(se);
+    if (!set || set.size === 0) return '';
+    if (set.has('TOT')) return 'TOT';
+    const arr = [...set].filter((x) => x !== 'TOT').sort();
+    if (arr.length === 0) return 'TOT';
+    if (arr.length === 1) return arr[0] ?? '';
+    return arr.join('/');
+  };
+
+  const posRes = await pool.query(
+    `
+    SELECT DISTINCT ON (b.season)
+      b.season::integer AS season,
+      NULLIF(
+        COALESCE(
+          NULLIF(TRIM(b.stats_jsonb->>'Position'), ''),
+          NULLIF(TRIM(b.stats_jsonb->>'position'), ''),
+          NULLIF(TRIM(b.stats_jsonb->>'primary_position'), ''),
+          NULLIF(TRIM(b.stats_jsonb->>'Pos'), '')
+        ),
+        ''
+      ) AS position_display
+    FROM fg_batting_season_current b
+    WHERE ${playerFgPredicate('b')} AND b.level = 'MLB'
+    ORDER BY
+      b.season ASC,
+      CASE WHEN b.team = 'TOT' THEN 0 ELSE 1 END ASC,
+      b.pa DESC NULLS LAST
+    `,
+    [playerId]
+  );
+  const posMap = new Map<number, string | null>();
+  for (const r of posRes.rows as { season: number; position_display: string | null }[]) {
+    posMap.set(Number(r.season), sanitizeFgPositionDisplay(r.position_display));
+  }
+
+  const out = new Map<number, { team_display: string; position_display: string | null }>();
+  const seasons = new Set<number>([...teamsBySeason.keys(), ...posMap.keys()]);
+  for (const se of seasons) {
+    out.set(se, { team_display: teamLabel(se), position_display: posMap.get(se) ?? null });
+  }
+  return out;
+}
+
+async function fgPitchingSeasonDisplayBySeason(
+  pool: pg.Pool,
+  playerId: number
+): Promise<Map<number, { team_display: string; position_display: string | null }>> {
+  const { rows } = await pool.query(
+    `
+    SELECT f.season::integer AS season, f.team
+    FROM fg_pitching_season_current f
+    WHERE ${playerFgPredicate('f')} AND f.level = 'MLB'
+    `,
+    [playerId]
+  );
+  const teamsBySeason = new Map<number, Set<string>>();
+  for (const r of rows as { season: number; team: string }[]) {
+    const se = Number(r.season);
+    const t = String(r.team ?? '').trim();
+    if (!Number.isFinite(se) || !t) continue;
+    let set = teamsBySeason.get(se);
+    if (!set) {
+      set = new Set();
+      teamsBySeason.set(se, set);
+    }
+    set.add(t);
+  }
+  const teamLabel = (se: number): string => {
+    const set = teamsBySeason.get(se);
+    if (!set || set.size === 0) return '';
+    if (set.has('TOT')) return 'TOT';
+    const arr = [...set].filter((x) => x !== 'TOT').sort();
+    if (arr.length === 0) return 'TOT';
+    if (arr.length === 1) return arr[0] ?? '';
+    return arr.join('/');
+  };
+
+  const posRes = await pool.query(
+    `
+    SELECT DISTINCT ON (f.season)
+      f.season::integer AS season,
+      NULLIF(
+        COALESCE(
+          NULLIF(TRIM(f.stats_jsonb->>'Position'), ''),
+          NULLIF(TRIM(f.stats_jsonb->>'position'), ''),
+          NULLIF(TRIM(f.stats_jsonb->>'primary_position'), ''),
+          NULLIF(TRIM(f.stats_jsonb->>'Pos'), '')
+        ),
+        ''
+      ) AS position_display
+    FROM fg_pitching_season_current f
+    WHERE ${playerFgPredicate('f')} AND f.level = 'MLB'
+    ORDER BY
+      f.season ASC,
+      CASE WHEN f.team = 'TOT' THEN 0 ELSE 1 END ASC,
+      f.ip DESC NULLS LAST
+    `,
+    [playerId]
+  );
+  const posMap = new Map<number, string | null>();
+  for (const r of posRes.rows as { season: number; position_display: string | null }[]) {
+    posMap.set(Number(r.season), sanitizeFgPositionDisplay(r.position_display));
+  }
+
+  const out = new Map<number, { team_display: string; position_display: string | null }>();
+  const seasons = new Set<number>([...teamsBySeason.keys(), ...posMap.keys()]);
+  for (const se of seasons) {
+    out.set(se, { team_display: teamLabel(se), position_display: posMap.get(se) ?? null });
+  }
+  return out;
+}
 
 /**
  * Career row matches `fg_batting_career_mlb` but aggregates only this player’s `id_fg` rows
@@ -209,13 +418,27 @@ export async function getFgBattingCardPayload(
   const careerParams = [playerId];
 
   if (careerOnly) {
-    const careerRes = await pool.query(careerSql, careerParams);
+    const [careerRes, peakRes] = await Promise.all([
+      pool.query(careerSql, careerParams),
+      pool.query(FG_BATTING_PEAK_WAR_SQL, careerParams),
+    ]);
     const careerRow = careerRes.rows[0];
+    const peakWar = peakRes.rows[0]?.peak_war_fwar ?? null;
+    const cw = careerRow?.career_war ?? null;
+    const jaws = jawsFwarFromCareerAndPeak(cw, peakWar);
+    const peakNum =
+      peakWar != null && typeof peakWar === 'number'
+        ? peakWar
+        : peakWar != null
+          ? Number(peakWar)
+          : null;
     return {
       career: careerRow ? rowToJson(careerRow as Record<string, unknown>) : null,
       seasons: [],
       max_season: null,
       has_row_for_season: null,
+      jaws_fwar: jaws,
+      peak_war_fwar: peakNum != null && Number.isFinite(peakNum) ? peakNum : null,
     };
   }
 
@@ -242,20 +465,42 @@ export async function getFgBattingCardPayload(
   const seasonsParams = [playerId, lim];
   const metaParams = forSeason == null ? [playerId] : [playerId, forSeason];
 
-  const [careerRes, seasonsRes, metaRes] = await Promise.all([
+  const [careerRes, peakRes, seasonsRes, metaRes, displayBySeason] = await Promise.all([
     pool.query(careerSql, careerParams),
+    pool.query(FG_BATTING_PEAK_WAR_SQL, careerParams),
     pool.query(seasonsSql, seasonsParams),
     pool.query(metaSql, metaParams),
+    fgBattingSeasonDisplayBySeason(pool, playerId),
   ]);
 
   const careerRow = careerRes.rows[0];
+  const peakWar = peakRes.rows[0]?.peak_war_fwar ?? null;
+  const jaws = jawsFwarFromCareerAndPeak(careerRow?.career_war ?? null, peakWar);
+  const peakNum =
+    peakWar != null && typeof peakWar === 'number'
+      ? peakWar
+      : peakWar != null
+        ? Number(peakWar)
+        : null;
   const meta = metaRes.rows[0] as { max_season: number | null; has_row: boolean | null };
+
+  const seasonsJson = rowsToJson(seasonsRes.rows as Record<string, unknown>[]).map((row) => {
+    const sn = Number(row.season);
+    const d = displayBySeason.get(sn);
+    return {
+      ...row,
+      team_display: d?.team_display ?? null,
+      position_display: d?.position_display ?? null,
+    };
+  });
 
   return {
     career: careerRow ? rowToJson(careerRow as Record<string, unknown>) : null,
-    seasons: rowsToJson(seasonsRes.rows as Record<string, unknown>[]),
+    seasons: seasonsJson,
     max_season: meta?.max_season ?? null,
     has_row_for_season: forSeason == null ? null : meta?.has_row ?? null,
+    jaws_fwar: jaws,
+    peak_war_fwar: peakNum != null && Number.isFinite(peakNum) ? peakNum : null,
   };
 }
 
@@ -276,13 +521,27 @@ export async function getFgPitchingCardPayload(
   const careerParams = [playerId];
 
   if (careerOnly) {
-    const careerRes = await pool.query(careerSql, careerParams);
+    const [careerRes, peakRes] = await Promise.all([
+      pool.query(careerSql, careerParams),
+      pool.query(FG_PITCHING_PEAK_WAR_SQL, careerParams),
+    ]);
     const careerRow = careerRes.rows[0];
+    const peakWar = peakRes.rows[0]?.peak_war_fwar ?? null;
+    const cw = careerRow?.career_war ?? null;
+    const jaws = jawsFwarFromCareerAndPeak(cw, peakWar);
+    const peakNum =
+      peakWar != null && typeof peakWar === 'number'
+        ? peakWar
+        : peakWar != null
+          ? Number(peakWar)
+          : null;
     return {
       career: careerRow ? rowToJson(careerRow as Record<string, unknown>) : null,
       seasons: [],
       max_season: null,
       has_row_for_season: null,
+      jaws_fwar: jaws,
+      peak_war_fwar: peakNum != null && Number.isFinite(peakNum) ? peakNum : null,
     };
   }
 
@@ -309,20 +568,44 @@ export async function getFgPitchingCardPayload(
   const seasonsParams = [playerId, lim];
   const metaParams = forSeason == null ? [playerId] : [playerId, forSeason];
 
-  const [careerRes, seasonsRes, metaRes] = await Promise.all([
+  const [careerRes, peakRes, seasonsRes, metaRes, displayBySeason] = await Promise.all([
     pool.query(careerSql, careerParams),
+    pool.query(FG_PITCHING_PEAK_WAR_SQL, careerParams),
     pool.query(seasonsSql, seasonsParams),
     pool.query(metaSql, metaParams),
+    fgPitchingSeasonDisplayBySeason(pool, playerId),
   ]);
 
   const careerRow = careerRes.rows[0];
+  const peakWar = peakRes.rows[0]?.peak_war_fwar ?? null;
+  const jaws = jawsFwarFromCareerAndPeak(careerRow?.career_war ?? null, peakWar);
+  const peakNum =
+    peakWar != null && typeof peakWar === 'number'
+      ? peakWar
+      : peakWar != null
+        ? Number(peakWar)
+        : null;
   const meta = metaRes.rows[0] as { max_season: number | null; has_row: boolean | null };
+
+  const seasonsJson = rowsToJson(seasonsRes.rows as Record<string, unknown>[]).map((row) => {
+    const sn = Number(row.season);
+    const d = displayBySeason.get(sn);
+    const usage = pitcherUsageRoleLabel(row.games_started, row.games);
+    const posFg = d?.position_display ?? null;
+    return {
+      ...row,
+      team_display: d?.team_display ?? null,
+      position_display: usage ?? posFg,
+    };
+  });
 
   return {
     career: careerRow ? rowToJson(careerRow as Record<string, unknown>) : null,
-    seasons: rowsToJson(seasonsRes.rows as Record<string, unknown>[]),
+    seasons: seasonsJson,
     max_season: meta?.max_season ?? null,
     has_row_for_season: forSeason == null ? null : meta?.has_row ?? null,
+    jaws_fwar: jaws,
+    peak_war_fwar: peakNum != null && Number.isFinite(peakNum) ? peakNum : null,
   };
 }
 

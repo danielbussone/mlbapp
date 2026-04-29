@@ -2,6 +2,27 @@
 
 `POST /chat` on the Fastify API (`http://localhost:3001/chat` when running locally). Response is **SSE** (`text/event-stream`): `tool_start`, `tool_result`, `token`, `error`, `done`.
 
+## Request body (beyond `message`)
+
+- **`active_player_id`** / **`active_season`** (optional, positive integers): sent by the web UI when a player card is open. The host injects a synthetic `resolve_player` result for that `player_id` when the message does **not** name a different player (no bio/bare-name intent). Use this for follow-ups like “What was his best WAR season?” without repeating the name.
+- **Grounding:** When the message **does** match player intent (e.g. “Tell me about …”, “Talk about …”, bare `First Last`, or inline “what was X in 2024”), the host runs **`resolve_player` before the first Ollama turn** so the model cannot answer with made-up FanGraphs lines before tools run. If `resolve_player` returns **multiple** `candidates`, the host does **not** auto-run `get_fg_season_line` until there is exactly one match; the model should ask the user to disambiguate.
+- **Statcast host inject:** Phrases like **`Statcast pitch mix for {Name} in {YYYY}`** / **`pitch mix for {Name} in {YYYY}`** (pitcher) and **`What is {Name}'s average exit velocity in {YYYY}?`** (batter) trigger **`resolve_player`** plus **`statcast_pitcher_pitch_mix`** or **`statcast_batter_batted_ball`** before the first model turn when the name resolves to exactly one player.
+- **Compare with a year:** `How do A and B differ in 2024?` passes **`season_from` / `season_to`** into **`compare_players_career`** on the server. The web compare sidebar calls **`GET /players/compare/fg-career?...&season=YYYY`** for a **single-season** FanGraphs table when a year is detected.
+
+Example with an open card:
+
+```bash
+curl -sN -X POST "${CHAT:-http://localhost:3001/chat}" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Summarize his last three seasons.","active_player_id":12345,"active_season":2024}'
+```
+
+## `GET /players/named` (sidebar resolve)
+
+- **200:** `{ "player_id": <number> }` — unique match.
+- **404:** `{ "error": "…" }` — no match.
+- **409:** `{ "error": "…", "candidates": [ … ] }` — ambiguous name; each candidate includes `player_id`, `name_first`, `name_last`, `birth_date`, `key_mlbam`, `externals`, plus **`career_hint`** (e.g. `14 seasons with SEA and NYY` or `22 seasons with SEA, NYY, and TEX`) derived from FanGraphs distinct season counts and up to five team abbreviations ranked by combined batting + pitching games.
+
 ## Prerequisites
 
 - **`DATABASE_URL`** set (without it the API returns **503** + SSE `error` + `done`).
@@ -14,6 +35,51 @@ Optional: filter events only:
 ```bash
 curl -sN ... | grep -E '^event:'
 ```
+
+## Example chat queries to try
+
+Use these in the web UI or as the `message` field in `POST /chat`. After each send, confirm early **`tool_start` / `tool_result`** for `resolve_player` (and often `get_fg_season_line`) on player-intent prompts, and that assistant numbers match tool JSON (no invented slash lines or awards).
+
+**Player intent + card / host pre-resolve (wording variants)**
+
+1. `Tell me about Shohei Ohtani`
+2. `Talk about Mookie Betts`
+3. `Who is Mike Trout?`
+4. `About Ronald Acuña Jr.` (generational suffix handling)
+5. `Shohei Ohtani` (bare two-word search)
+6. `What was Freddie Freeman like in 2020?` (inline year)
+7. `How did Juan Soto do in 2019?`
+
+**Role / season hints**
+
+8. `Tell me about Jacob deGrom’s pitching in 2018`
+9. `Tell me about Shohei Ohtani’s batting in 2021` (batting-only phrasing)
+10. `Fangraphs batting line for Bryce Harper in 2015`
+
+**Two-player compare**
+
+11. `Compare Mike Trout and Ken Griffey Jr.`
+12. `How do Mookie Betts and Ronald Acuña Jr. differ in 2024?` (explicit year + compare phrasing)
+
+**Statcast-style (model or tools)**
+
+13. `Statcast pitch mix for Gerrit Cole in 2023`
+14. `What is Aaron Judge’s average exit velocity in 2024?` (batted-ball / Statcast path if model chooses it)
+
+**Active card context** (`active_player_id` / `active_season` in JSON — web sends these automatically when a card is open)
+
+15. Open a player card, then: `What was his best WAR season?`
+16. Same, with a specific year on the card: `How did he do that year?` (should respect `active_season` when the message does not name another year)
+
+**Ambiguity / disambiguation**
+
+17. A name your DB returns as **multiple** `candidates` (see checklist “Ambiguous name”); expect **no** auto `get_fg_season_line` until one player is chosen, and assistant text that lists options.
+
+**Negative / non-player (should not open the sidebar as a name search)**
+
+18. `What is WAR?`
+19. `Explain ERA and FIP`
+20. `Compare launch angle and exit velocity` (no two player names — behavior depends on model; not a sidebar name open)
 
 ## Tool test checklist (quick pass)
 

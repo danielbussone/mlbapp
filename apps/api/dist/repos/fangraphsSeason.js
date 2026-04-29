@@ -1,5 +1,8 @@
 import { rowsToJson } from './rowJson.js';
-const MAX_ROWS = 30;
+/** Default max rows for `get_fg_season_line` tool and ad-hoc queries. */
+const DEFAULT_FG_SEASON_LIMIT = 30;
+/** Upper bound when `compare_mode` is set (long careers + multiple team rows per year). */
+export const FG_COMPARE_SEASON_ROW_CEILING = 120;
 const BATTING_COLS = `
   b.season, b.team, b.level, b.id_fg, b.age, b.games, b.pa, b.hr, b.r, b.rbi, b.sb,
   b.bb_pct, b.k_pct, b.iso, b.babip, b.avg, b.obp, b.slg, b.woba, b.xwoba, b.wrc_plus,
@@ -11,7 +14,9 @@ const PITCHING_COLS = `
   f.vfa, f.era, f.xera, f.fip, f.xfip, f.war, f.rate_stat_qualified, f.stats_jsonb, f.ingest_pulled_at
 `;
 export async function getFgSeasonLines(pool, input) {
-    const limit = Math.min(Math.max(input.limit ?? MAX_ROWS, 1), MAX_ROWS);
+    const cap = input.compare_mode ? FG_COMPARE_SEASON_ROW_CEILING : DEFAULT_FG_SEASON_LIMIT;
+    const defaultWhenUnset = input.compare_mode ? FG_COMPARE_SEASON_ROW_CEILING : DEFAULT_FG_SEASON_LIMIT;
+    const limit = Math.min(Math.max(input.limit ?? defaultWhenUnset, 1), cap);
     // Match by Chadwick fangraphs crosswalk OR by FG row.player_id (ETL may link without matching id_fg text).
     const joinBat = `
     FROM fg_batting_season_current b

@@ -3,6 +3,13 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useMemo } from 'react';
 
+import {
+  SPRAY_FIELD_VB as VB,
+  SPRAY_FIELD_VIEW_HEIGHT as VB_HEIGHT,
+  SPRAY_FIELD_Y_MIN as VB_Y_MIN,
+  sprayFieldImageHref as fieldImg,
+} from './sprayFieldConstants.js';
+
 type HitKind = 'single' | 'double' | 'triple' | 'home_run' | 'other';
 
 const HIT_COLORS: Record<HitKind, string> = {
@@ -23,13 +30,6 @@ function classifyHit(events: string): HitKind {
 }
 
 export type SprayRow = Record<string, unknown>;
-
-/** Field graphic is 100×100 user units (matches 1024×1024 asset). */
-const VB = 100;
-/** Extra SVG space above the image (same units); deepest BIP can plot here without shrinking the overlay. */
-const SPRAY_HEADROOM_TOP = 14;
-const VB_Y_MIN = -SPRAY_HEADROOM_TOP;
-const VB_HEIGHT = VB + SPRAY_HEADROOM_TOP;
 
 /**
  * Statcast in-park hit coordinates (feet).
@@ -91,8 +91,6 @@ function projectStatcastToSvg(hcX: number, hcY: number): { px: number; py: numbe
   return { px, py };
 }
 
-const fieldImg = `${import.meta.env.BASE_URL}spray/dodger-stadium-dimensions.png`;
-
 /**
  * Batter spray chart: Statcast `hc_x` / `hc_y` (feet) on Dodger Stadium dimensions diagram.
  * Catcher view — LF toward smaller `hc_x`.
@@ -151,7 +149,6 @@ export function SprayChart({ rows, gameYear }: { rows: SprayRow[]; gameYear: num
           role="img"
           aria-label={`Hits spray chart, ${gameYear}`}
         >
-          <rect x={0} y={VB_Y_MIN} width={VB} height={SPRAY_HEADROOM_TOP} fill="#f5f5f5" />
           <image
             href={fieldImg}
             x={0}
