@@ -186,6 +186,31 @@ def _fetch_fielding(
     return normalize_api_fielding_df(raw)
 
 
+def _pick_pitching_ra9_war(row: Any) -> float | None:
+    """FanGraphs leaders JSON uses inconsistent column names for RA9-based pitching WAR."""
+    v = pick(
+        row,
+        "RA9-WAR",
+        "RA9 WAR",
+        "RA9_WAR",
+        "RA9WAR",
+        "WAR_RA9",
+        # Major-league API omits ``RA9-WAR``; leaderboard \"RA9-WAR\" column matches this field.
+        "RA9-Wins",
+    )
+    if v is not None:
+        return as_numeric(v, 2)
+    try:
+        cols = list(row.index)
+    except AttributeError:
+        return None
+    for col in cols:
+        c_low = str(col).lower()
+        if "ra9" in c_low and "war" in c_low:
+            return as_numeric(row[col], 2)
+    return None
+
+
 def _batting_row(snapshot_id: uuid.UUID, row: Any) -> dict[str, Any]:
     id_fg = as_int(pick(row, "IDfg"))
     if id_fg is None:
@@ -272,6 +297,7 @@ def _pitching_row(snapshot_id: uuid.UUID, row: Any) -> dict[str, Any]:
         "fip": as_numeric(pick(row, "FIP"), 2),
         "xfip": as_numeric(pick(row, "xFIP"), 2),
         "war": as_numeric(pick(row, "WAR"), 2),
+        "war_ra9": _pick_pitching_ra9_war(row),
         "rate_stat_qualified": rate_q,
         "stats_jsonb": stats_jsonb,
     }
@@ -333,13 +359,13 @@ INSERT INTO fg_pitching_season (
   snapshot_id, id_fg, season, team, level, player_id,
   age, w, l, sv, games, games_started, ip,
   k_per_9, bb_per_9, hr_per_9, babip, lob_pct, gb_pct, hr_fb_pct,
-  vfa, era, xera, fip, xfip, war,
+  vfa, era, xera, fip, xfip, war, war_ra9,
   rate_stat_qualified, stats_jsonb
 ) VALUES (
   %(snapshot_id)s::uuid, %(id_fg)s, %(season)s, %(team)s, %(level)s, NULL,
   %(age)s, %(w)s, %(l)s, %(sv)s, %(games)s, %(games_started)s, %(ip)s,
   %(k_per_9)s, %(bb_per_9)s, %(hr_per_9)s, %(babip)s, %(lob_pct)s, %(gb_pct)s, %(hr_fb_pct)s,
-  %(vfa)s, %(era)s, %(xera)s, %(fip)s, %(xfip)s, %(war)s,
+  %(vfa)s, %(era)s, %(xera)s, %(fip)s, %(xfip)s, %(war)s, %(war_ra9)s,
   %(rate_stat_qualified)s, %(stats_jsonb)s
 )
 """

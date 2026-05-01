@@ -25,7 +25,7 @@ import {
   enrichPitchTypeMvHypotheticals,
 } from './leaguePercentilesMidrankMv.js';
 
-export const LEAGUE_PERCENTILES_COHORT_SPEC_VERSION = '2026.17';
+export const LEAGUE_PERCENTILES_COHORT_SPEC_VERSION = '2026.21';
 
 function num(v: unknown): number | null {
   if (v == null) return null;
@@ -119,6 +119,110 @@ function mapCohortRows(rows: Record<string, unknown>[]): FieldingCohortMetricRow
     oaa: num(r.oaa),
     frv: num(r.frv),
   }));
+}
+
+function firstNumberFromJson(
+  j: Record<string, unknown> | null | undefined,
+  keys: string[]
+): number | null {
+  if (!j) return null;
+  for (const k of keys) {
+    const raw = j[k];
+    if (raw == null) continue;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string') {
+      const n = Number(String(raw).trim());
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
+function extractCatcherMetrics(j: Record<string, unknown> | null | undefined): {
+  blocks: number | null;
+  cs: number | null;
+  framing: number | null;
+  pop: number | null;
+} {
+  return {
+    blocks: firstNumberFromJson(j, ['BlkR', 'Blk', 'Blocking', 'Blk Runs']),
+    cs: firstNumberFromJson(j, ['CSAA', 'rSB', 'rCERA', 'CS Runs']),
+    framing: firstNumberFromJson(j, ['FrmR', 'FRM', 'Framing', 'Frm']),
+    pop: firstNumberFromJson(j, ['Pop Time', 'Pop', 'pop', 'POP']),
+  };
+}
+
+async function fetchCatchingValuePercentiles(
+  pool: pg.Pool,
+  input: { season: number; player_id: number; minInn: number }
+): Promise<Record<string, PercentileSlot> | null> {
+  const fgPlayer = playerFgPredicate('f');
+  const { rows: pr } = await pool.query(
+    `
+    SELECT f.inn::numeric AS inn, f.stats_jsonb
+    FROM fg_fielding_season_current f
+    WHERE (${fgPlayer}) AND f.season = $2 AND f.level = 'MLB'
+      AND upper(trim(f.position)) = 'C'
+      AND ${FG_FIELDING_SUMMABLE_POS}
+    ORDER BY f.inn DESC NULLS LAST
+    LIMIT 1
+    `,
+    [input.player_id, input.season]
+  );
+  const prow = (pr[0] ?? {}) as Record<string, unknown>;
+  const playerInn = num(prow.inn);
+  const pJson = prow.stats_jsonb as Record<string, unknown> | null | undefined;
+  const pMet = extractCatcherMetrics(pJson);
+  if (playerInn == null || playerInn <= 0) return null;
+
+  const { rows: cr } = await pool.query(
+    `
+    SELECT t.stats_jsonb
+    FROM (
+      SELECT DISTINCT ON (f.id_fg)
+        f.id_fg,
+        f.inn::numeric AS inn,
+        f.stats_jsonb
+      FROM fg_fielding_season_current f
+      WHERE f.season = $1 AND f.level = 'MLB'
+        AND upper(trim(f.position)) = 'C'
+        AND ${FG_FIELDING_SUMMABLE_POS}
+      ORDER BY f.id_fg, f.inn DESC NULLS LAST
+    ) t
+    WHERE COALESCE(t.inn, 0) >= $2::numeric
+    `,
+    [input.season, input.minInn]
+  );
+  const cohortRows = rowsToJson(cr as Record<string, unknown>[]) as Record<string, unknown>[];
+  const cohortParsed = cohortRows.map((r) =>
+    extractCatcherMetrics(r.stats_jsonb as Record<string, unknown>)
+  );
+
+  const qual = playerInn >= input.minInn;
+  const out: Record<string, PercentileSlot> = {};
+
+  const addMetric = (
+    metricId: 'catch_blocks_above_avg' | 'catch_cs_above_avg' | 'catch_framing_runs' | 'catch_pop_time_sec',
+    playerVal: number | null,
+    cohortRaw: (number | null)[]
+  ) => {
+    const vals = cohortRaw.filter((x): x is number => x != null && Number.isFinite(x));
+    if (vals.length === 0 || playerVal == null || !Number.isFinite(playerVal)) return;
+    out[metricId] = buildPercentileSlot({
+      percentile: midrankPercentile(vals, playerVal),
+      cohortN: vals.length,
+      qualified: qual,
+      value: playerVal,
+      direction: directionForMetric(metricId),
+    });
+  };
+
+  addMetric('catch_blocks_above_avg', pMet.blocks, cohortParsed.map((c) => c.blocks));
+  addMetric('catch_cs_above_avg', pMet.cs, cohortParsed.map((c) => c.cs));
+  addMetric('catch_framing_runs', pMet.framing, cohortParsed.map((c) => c.framing));
+  addMetric('catch_pop_time_sec', pMet.pop, cohortParsed.map((c) => c.pop));
+
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 /** One FG position (exact) or outfield union for `OF` query param. */
@@ -314,6 +418,16 @@ export async function fetchFieldingLeaguePercentilesBundle(
     }
   }
 
+  let savant_catching: Record<string, PercentileSlot> | undefined;
+  if (positions.includes('C')) {
+    const c = await fetchCatchingValuePercentiles(pool, {
+      season: input.season,
+      player_id: input.player_id,
+      minInn,
+    });
+    if (c != null && Object.keys(c).length > 0) savant_catching = c;
+  }
+
   return {
     cohort_spec_version: LEAGUE_PERCENTILES_COHORT_SPEC_VERSION,
     game_year: input.season,
@@ -322,11 +436,13 @@ export async function fetchFieldingLeaguePercentilesBundle(
       'FanGraphs fielding',
       'Total: summed DRS/UZR/OAA/FRV across summable positions vs league id_fg season sums',
       `Per-position cohort: inn≥${minInn} at that position (prorated from max player games vs ${REFERENCE_SCHEDULE_GAMES})`,
+      'Catching value: FanGraphs stats_jsonb keys (BlkR/FrmR/rSB/Pop etc.) when present',
       'docs/COHORT_PERCENTILES_SPEC.md',
     ],
     percentiles_available: true,
     percentiles: totalGroup.percentiles,
     fielding_percentile_groups: groups,
+    ...(savant_catching != null ? { savant_catching } : {}),
   };
 }
 
@@ -452,6 +568,14 @@ export async function fetchBatterLeaguePercentiles(
       value: num(row.val_bat_whiff_pct),
       direction: directionForMetric('bat_whiff_pct'),
     }),
+    bip_ev90: slotFromRow(
+      'bip_ev90',
+      'pct_bip_ev90',
+      'cohort_n_bip',
+      bbe >= tBbe && num(row.val_bip_ev90) != null,
+      'val_bip_ev90',
+      row
+    ),
   };
 
   await enrichBatterStatcastMvHypotheticals(pool, {
@@ -508,7 +632,7 @@ export async function fetchBatterLeaguePercentiles(
     role: 'batter',
     cohort_notes: [
       'MLB Statcast',
-      'FanGraphs season (xwOBA, K%, BB%, AVG, SLG)',
+      'FanGraphs season (value: BsR, Off, Def, WAR; xwOBA, wOBA, wRC+, K%, BB%, AVG, SLG, ISO)',
       'docs/COHORT_PERCENTILES_SPEC.md',
     ],
     percentiles_available: true,
@@ -794,7 +918,7 @@ export async function fetchPitcherLeaguePercentiles(
     role: 'pitcher',
     cohort_notes: [
       'MLB Statcast',
-      'FanGraphs season (xERA, K%, BB%)',
+      'FanGraphs season (WAR FIP, WAR RA9, xERA, xFIP, K%, BB%)',
       'pitch-type cohort: (game_year, pitch_type)',
       'docs/COHORT_PERCENTILES_SPEC.md',
     ],

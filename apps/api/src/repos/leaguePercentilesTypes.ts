@@ -39,4 +39,6 @@ export type LeaguePercentilesResponse = {
   fielding_percentile_groups?: FieldingPercentileGroup[];
   /** Sprint speed; returned for batter + fielding roles when data exists. */
   savant_running?: Record<string, PercentileSlot>;
+  /** Fielding role: catcher framing/blocking/CS/pop when FG JSON exposes metrics at C. */
+  savant_catching?: Record<string, PercentileSlot>;
 };

@@ -61,6 +61,11 @@
   margin-bottom: 6px;
 }
 
+/** Extra space between the divider and the "Running" heading (not above the divider). */
+.runningSection > .sectionCaption {
+  margin-top: var(--mui-spacing-1, 8px);
+}
+
 .pitchTypeBlock {
   margin-bottom: 4px;
 }

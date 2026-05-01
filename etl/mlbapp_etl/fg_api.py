@@ -241,6 +241,12 @@ def normalize_api_pitching_df(df: pd.DataFrame) -> pd.DataFrame:
     out["Level"] = "MLB"
     if "vFA" not in out.columns and "FBv" in out.columns:
         out["vFA"] = out["FBv"]
+    # RA9-WAR: live API / json_normalize sometimes uses underscores or spacing only.
+    if "RA9-WAR" not in out.columns:
+        for alt in ("RA9 WAR", "RA9_WAR", "RA9WAR", "WAR_RA9", "RA9-Wins"):
+            if alt in out.columns:
+                out["RA9-WAR"] = out[alt]
+                break
     return out
 
 

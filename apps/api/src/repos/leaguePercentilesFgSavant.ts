@@ -56,11 +56,27 @@ export async function fetchSavantFgBattingSeason(
   const minPa = Math.max(1, min_pa);
   const cohortPa = cohortPeerFloorForQualifiedMin(minPa);
   const cohortWhere = `season = $1 AND pa >= ${cohortPa} AND player_id IS NOT NULL`;
+  const cohortConsolidatedWhere = `season = $1 AND level = 'MLB' AND pa >= ${cohortPa} AND player_id IS NOT NULL`;
   const kExpr = `COALESCE(k_pct, k_pct_from_so)::float8`;
 
-  const [{ rows: pr }, xwC, kC, bbC, avgC, slgC] = await Promise.all([
+  const [
+    { rows: pr },
+    xwC,
+    wobaC,
+    wrcC,
+    kC,
+    bbC,
+    avgC,
+    slgC,
+    isoC,
+    { rows: consRows },
+    bsrC,
+    offC,
+    defC,
+    warBatC,
+  ] = await Promise.all([
     pool.query(
-      `SELECT xwoba_pa_weighted, pa, k_pct, bb_pct, season_avg, season_slg, k_pct_from_so
+      `SELECT xwoba_pa_weighted, woba_pa_weighted, wrc_plus_pa_weighted, pa, k_pct, bb_pct, season_avg, season_slg, k_pct_from_so
        FROM fg_batting_season_mlb_merged_rates
        WHERE player_id = $2 AND season = $1`,
       [season, player_id]
@@ -68,6 +84,16 @@ export async function fetchSavantFgBattingSeason(
     pool.query(
       `SELECT xwoba_pa_weighted::float8 AS v FROM fg_batting_season_mlb_merged_rates
        WHERE ${cohortWhere} AND xwoba_pa_weighted IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT woba_pa_weighted::float8 AS v FROM fg_batting_season_mlb_merged_rates
+       WHERE ${cohortWhere} AND woba_pa_weighted IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT wrc_plus_pa_weighted::float8 AS v FROM fg_batting_season_mlb_merged_rates
+       WHERE ${cohortWhere} AND wrc_plus_pa_weighted IS NOT NULL`,
       [season]
     ),
     pool.query(
@@ -90,33 +116,125 @@ export async function fetchSavantFgBattingSeason(
        WHERE ${cohortWhere} AND season_slg IS NOT NULL`,
       [season]
     ),
+    pool.query(
+      `SELECT (season_slg::numeric - season_avg::numeric)::float8 AS v
+       FROM fg_batting_season_mlb_merged_rates
+       WHERE ${cohortWhere} AND season_slg IS NOT NULL AND season_avg IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT pa, bsr, off_runs, def_runs, war
+       FROM fg_batting_season_mlb_consolidated
+       WHERE player_id = $2 AND season = $1 AND level = 'MLB'`,
+      [season, player_id]
+    ),
+    pool.query(
+      `SELECT bsr::float8 AS v FROM fg_batting_season_mlb_consolidated
+       WHERE ${cohortConsolidatedWhere} AND bsr IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT off_runs::float8 AS v FROM fg_batting_season_mlb_consolidated
+       WHERE ${cohortConsolidatedWhere} AND off_runs IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT def_runs::float8 AS v FROM fg_batting_season_mlb_consolidated
+       WHERE ${cohortConsolidatedWhere} AND def_runs IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT war::float8 AS v FROM fg_batting_season_mlb_consolidated
+       WHERE ${cohortConsolidatedWhere} AND war IS NOT NULL`,
+      [season]
+    ),
   ]);
 
   const pRow = (pr[0] ?? {}) as Record<string, unknown>;
   const pa = int(pRow.pa) ?? 0;
   const xw = num(pRow.xwoba_pa_weighted);
+  const woba = num(pRow.woba_pa_weighted);
+  const wrcPlus = num(pRow.wrc_plus_pa_weighted);
   const kPct = num(pRow.k_pct) ?? num(pRow.k_pct_from_so);
   const bbPct = num(pRow.bb_pct);
   const avg = num(pRow.season_avg);
   const slg = num(pRow.season_slg);
+  const iso = avg != null && slg != null ? slg - avg : null;
 
   const xwArr = xwC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const wobaArr = wobaC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const wrcArr = wrcC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
   const kArr = kC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
   const bbArr = bbC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
   const avgArr = avgC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
   const slgArr = slgC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const isoArr = isoC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
 
   const qualBat = pa >= minPa;
   /** Non-provisional once PA ≥ 10% of the prorated full-season bar (`battingFgSeasonEarlyQualifiedPa`). */
   const qualFgEarly = qualBat || pa >= battingFgSeasonEarlyQualifiedPa(minPa);
 
+  const cRow = (consRows[0] ?? {}) as Record<string, unknown>;
+  const paC = int(cRow.pa) ?? 0;
+  const bsr = num(cRow.bsr);
+  const off = num(cRow.off_runs);
+  const defR = num(cRow.def_runs);
+  const warBat = num(cRow.war);
+  const bsrArr = bsrC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const offArr = offC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const defArr = defC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const warBatArr = warBatC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const qualFgValue = paC >= minPa || paC >= battingFgSeasonEarlyQualifiedPa(minPa);
+
   return {
+    fg_season_bsr: slotFg(
+      'fg_season_bsr',
+      bsr != null ? midrankPercentile(bsrArr, bsr) : null,
+      bsrArr.length,
+      qualFgValue,
+      bsr
+    ),
+    fg_season_off: slotFg(
+      'fg_season_off',
+      off != null ? midrankPercentile(offArr, off) : null,
+      offArr.length,
+      qualFgValue,
+      off
+    ),
+    fg_season_def: slotFg(
+      'fg_season_def',
+      defR != null ? midrankPercentile(defArr, defR) : null,
+      defArr.length,
+      qualFgValue,
+      defR
+    ),
+    fg_season_bat_war: slotFg(
+      'fg_season_bat_war',
+      warBat != null ? midrankPercentile(warBatArr, warBat) : null,
+      warBatArr.length,
+      qualFgValue,
+      warBat
+    ),
     fg_season_xwoba: slotFg(
       'fg_season_xwoba',
       xw != null ? midrankPercentile(xwArr, xw) : null,
       xwArr.length,
       qualFgEarly,
       xw
+    ),
+    fg_season_woba: slotFg(
+      'fg_season_woba',
+      woba != null ? midrankPercentile(wobaArr, woba) : null,
+      wobaArr.length,
+      qualFgEarly,
+      woba
+    ),
+    fg_season_wrc_plus: slotFg(
+      'fg_season_wrc_plus',
+      wrcPlus != null ? midrankPercentile(wrcArr, wrcPlus) : null,
+      wrcArr.length,
+      qualFgEarly,
+      wrcPlus != null ? Math.round(wrcPlus * 10) / 10 : null
     ),
     fg_season_k_pct: slotFg(
       'fg_season_k_pct',
@@ -146,6 +264,13 @@ export async function fetchSavantFgBattingSeason(
       qualFgEarly,
       slg != null ? Math.round(slg * 1000) / 1000 : null
     ),
+    fg_season_iso: slotFg(
+      'fg_season_iso',
+      iso != null ? midrankPercentile(isoArr, iso) : null,
+      isoArr.length,
+      qualFgEarly,
+      iso != null ? Math.round(iso * 1000) / 1000 : null
+    ),
   };
 }
 
@@ -159,9 +284,10 @@ export async function fetchSavantFgPitchingSeason(
   /** Qualification uses minTbf; midrank cohorts use a lower floor (see cohortPeerFloorForQualifiedMin). */
   const cohortWhere = `season = $1 AND tbf >= ${cohortTbf} AND player_id IS NOT NULL`;
 
-  const [{ rows: pr }, xeraC, kC, bbC] = await Promise.all([
+  const [{ rows: pr }, xeraC, xfipC, kC, bbC, wfC, wrC] = await Promise.all([
     pool.query(
-      `SELECT tbf, k_pct::float8 AS k_pct, bb_pct::float8 AS bb_pct, xera::float8 AS xera
+      `SELECT tbf, k_pct::float8 AS k_pct, bb_pct::float8 AS bb_pct, xera::float8 AS xera, xfip::float8 AS xfip,
+              war_fip::float8 AS war_fip, war_ra9::float8 AS war_ra9
        FROM fg_pitching_season_mlb_merged_stats
        WHERE player_id = $2 AND season = $1`,
       [season, player_id]
@@ -169,6 +295,11 @@ export async function fetchSavantFgPitchingSeason(
     pool.query(
       `SELECT xera::float8 AS v FROM fg_pitching_season_mlb_merged_stats
        WHERE ${cohortWhere} AND xera IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT xfip::float8 AS v FROM fg_pitching_season_mlb_merged_stats
+       WHERE ${cohortWhere} AND xfip IS NOT NULL`,
       [season]
     ),
     pool.query(
@@ -181,27 +312,64 @@ export async function fetchSavantFgPitchingSeason(
        WHERE ${cohortWhere} AND bb_pct IS NOT NULL`,
       [season]
     ),
+    pool.query(
+      `SELECT war_fip::float8 AS v FROM fg_pitching_season_mlb_merged_stats
+       WHERE ${cohortWhere} AND war_fip IS NOT NULL`,
+      [season]
+    ),
+    pool.query(
+      `SELECT war_ra9::float8 AS v FROM fg_pitching_season_mlb_merged_stats
+       WHERE ${cohortWhere} AND war_ra9 IS NOT NULL`,
+      [season]
+    ),
   ]);
 
   const pRow = (pr[0] ?? {}) as Record<string, unknown>;
   const tbf = int(pRow.tbf) ?? 0;
   const xera = num(pRow.xera);
+  const xfip = num(pRow.xfip);
   const kPct = num(pRow.k_pct);
   const bbPct = num(pRow.bb_pct);
+  const warFip = num(pRow.war_fip);
+  const warRa9 = num(pRow.war_ra9);
 
   const xeraArr = xeraC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const xfipArr = xfipC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
   const kArr = kC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
   const bbArr = bbC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const warFipArr = wfC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
+  const warRa9Arr = wrC.rows.map((r) => num((r as { v: unknown }).v)).filter((x): x is number => x != null);
 
   const qualPit = tbf >= minTbf;
 
   return {
+    fg_season_pit_war_fip: slotFg(
+      'fg_season_pit_war_fip',
+      warFip != null ? midrankPercentile(warFipArr, warFip) : null,
+      warFipArr.length,
+      qualPit,
+      warFip
+    ),
+    fg_season_pit_war_ra9: slotFg(
+      'fg_season_pit_war_ra9',
+      warRa9 != null ? midrankPercentile(warRa9Arr, warRa9) : null,
+      warRa9Arr.length,
+      qualPit,
+      warRa9
+    ),
     fg_season_pit_xera: slotFg(
       'fg_season_pit_xera',
       xera != null ? midrankPercentile(xeraArr, xera) : null,
       xeraArr.length,
       qualPit,
       xera
+    ),
+    fg_season_pit_xfip: slotFg(
+      'fg_season_pit_xfip',
+      xfip != null ? midrankPercentile(xfipArr, xfip) : null,
+      xfipArr.length,
+      qualPit,
+      xfip
     ),
     fg_season_pit_k_pct: slotFg(
       'fg_season_pit_k_pct',

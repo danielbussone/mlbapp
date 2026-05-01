@@ -31,4 +31,5 @@ export type LeaguePercentilesResponse = {
   savant_fielding?: Record<string, PercentileSlot>;
   savant_running?: Record<string, PercentileSlot>;
   fielding_percentile_groups?: FieldingPercentileGroup[];
+  savant_catching?: Record<string, PercentileSlot>;
 };

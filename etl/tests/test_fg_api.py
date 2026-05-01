@@ -120,4 +120,36 @@ def test_pitching_row_from_normalized_fixture() -> None:
     assert payload["id_fg"] == 23456
     assert payload["k_per_9"] == 9.5
     assert payload["vfa"] == 95.2
+    assert payload["war"] == 5.0
+    assert payload["war_ra9"] == 4.6
     assert payload["rate_stat_qualified"] is True  # 190.1 IP clears 162-game outs bar
+
+
+def test_normalize_api_pitching_promotes_ra9_war_underscore() -> None:
+    base = _load_rows("fg_api_pit_sample.json").drop(columns=["RA9-WAR"])
+    base["RA9_WAR"] = 4.6
+    df = normalize_api_pitching_df(base)
+    assert "RA9-WAR" in df.columns
+    assert df["RA9-WAR"].iloc[0] == 4.6
+
+
+def test_pitching_row_war_ra9_fuzzy_column_name() -> None:
+    """When API omits standard RA9-WAR keys, accept any column containing ra9 and war."""
+    import uuid
+
+    df = normalize_api_pitching_df(_load_rows("fg_api_pit_sample.json"))
+    row = df.iloc[0].drop(labels=["RA9-WAR"], errors="ignore")
+    row["Ra9WarAlt"] = 3.14
+    payload = _pitching_row(uuid.uuid4(), row)
+    assert payload["war_ra9"] == 3.14
+
+
+def test_pitching_row_war_ra9_from_ra9_wins() -> None:
+    """Live FG JSON uses RA9-Wins for the leaderboard RA9-WAR column when RA9-WAR key is absent."""
+    import uuid
+
+    base = _load_rows("fg_api_pit_sample.json").drop(columns=["RA9-WAR"])
+    base["RA9-Wins"] = 4.6
+    df = normalize_api_pitching_df(base)
+    payload = _pitching_row(uuid.uuid4(), df.iloc[0])
+    assert payload["war_ra9"] == 4.6

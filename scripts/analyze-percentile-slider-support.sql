@@ -53,6 +53,8 @@ WITH catalog(metric_id, card_role, support_class, primary_object, notes) AS (
     ('bip_avg_estimated_ba', 'batter', 'sql_backed', 'statcast_batter_season_savant_bip_mv', 'bbe_with_est_ba≥50'),
     -- Batting — FG merged view (runtime midrank in TS; cohort from SQL selects)
     ('fg_season_xwoba', 'batter', 'runtime_midrank', 'fg_batting_season_mlb_merged_rates', 'PA≥200 MLB cohort'),
+    ('fg_season_woba', 'batter', 'runtime_midrank', 'fg_batting_season_mlb_merged_rates', 'PA≥200 MLB cohort'),
+    ('fg_season_wrc_plus', 'batter', 'runtime_midrank', 'fg_batting_season_mlb_merged_rates', 'PA≥200 MLB cohort'),
     ('fg_season_k_pct', 'batter', 'runtime_midrank', 'fg_batting_season_mlb_merged_rates', 'PA≥200'),
     ('fg_season_bb_pct', 'batter', 'runtime_midrank', 'fg_batting_season_mlb_merged_rates', 'PA≥200'),
     ('fg_season_avg', 'batter', 'runtime_midrank', 'fg_batting_season_mlb_merged_rates', 'PA≥200'),
@@ -78,7 +80,10 @@ WITH catalog(metric_id, card_role, support_class, primary_object, notes) AS (
     ('pitch_avg_estimated_ba_allowed', 'pitcher', 'sql_backed', 'statcast_pitcher_season_savant_bip_mv', 'bbe_with_est_ba≥50'),
     ('pitch_hard_hit_pct_allowed', 'pitcher', 'sql_backed', 'statcast_pitcher_season_savant_bip_mv', 'bbe≥50'),
     -- Pitching — FG (runtime midrank)
+    ('fg_season_pit_war_fip', 'pitcher', 'runtime_midrank', 'fg_pitching_season_mlb_merged_stats', 'TBF≥150'),
+    ('fg_season_pit_war_ra9', 'pitcher', 'runtime_midrank', 'fg_pitching_season_mlb_merged_stats', 'TBF≥150; RA9-WAR from stats_jsonb'),
     ('fg_season_pit_xera', 'pitcher', 'runtime_midrank', 'fg_pitching_season_mlb_merged_stats', 'TBF≥150'),
+    ('fg_season_pit_xfip', 'pitcher', 'runtime_midrank', 'fg_pitching_season_mlb_merged_stats', 'TBF≥150'),
     ('fg_season_pit_k_pct', 'pitcher', 'runtime_midrank', 'fg_pitching_season_mlb_merged_stats', 'TBF≥150'),
     ('fg_season_pit_bb_pct', 'pitcher', 'runtime_midrank', 'fg_pitching_season_mlb_merged_stats', 'TBF≥150'),
     -- Pitch-type block (same metric ids, per pitch_type row)

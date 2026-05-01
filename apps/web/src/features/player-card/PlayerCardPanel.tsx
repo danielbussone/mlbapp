@@ -76,6 +76,7 @@ import { SprayChart } from '@/features/spray-chart/SprayChart.js';
 import { OaaHeatmapPlaceholder } from '@/features/fielding-oaa/OaaHeatmapPlaceholder.js';
 import { PitchMixVeloTable } from '@/features/pitch-mix/PitchMixVeloTable.js';
 import { LeaguePercentilesPanel } from '@/features/league-percentiles/LeaguePercentilesPanel.js';
+import { ScoutingToolsPrototype } from '@/features/scouting-tools/ScoutingToolsPrototype.js';
 import { JawsExpandedBlock } from '@/features/player-card/JawsExpandedBlock.js';
 import {
   parseStatcastSummaryPayload,
@@ -1137,6 +1138,12 @@ export function PlayerCardPanel({
                   </Stack>
                 );
               })()}
+              <Stack spacing={0.75} sx={{ mt: 1.5, mb: 1 }}>
+                <Typography variant="subtitle2" className={styles.sectionSubtitle}>
+                  Scouting (prototype)
+                </Typography>
+                <ScoutingToolsPrototype playerId={playerId} season={season} cardRole={role} />
+              </Stack>
               {role === 'fielding' ? (
                 <>
                   <Typography variant="subtitle2" className={styles.sectionSubtitle}>

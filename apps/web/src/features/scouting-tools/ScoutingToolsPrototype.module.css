@@ -1,0 +1,54 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.blurb {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.sectionTitle {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.table {
+  width: 100%;
+}
+
+.gradeCell {
+  white-space: nowrap;
+}
+
+.gradeMono {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.muted {
+  opacity: 0.55;
+}
+
+.gradeHint {
+  margin-left: 0.15rem;
+}
+
+.alertDense {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.headerTip,
+.toolLabel {
+  cursor: help;
+  border-bottom: 1px dotted currentColor;
+}
+
+.tooltipHit {
+  display: inline-block;
+  min-width: 2.5rem;
+  cursor: help;
+}

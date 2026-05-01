@@ -1,4 +1,4 @@
-# League percentile cohorts (`cohort_spec_version`: **2026.2**)
+# League percentile cohorts (`cohort_spec_version`: **2026.21**)
 
 Versioned definitions for [`GET /players/:id/league-percentiles`](../apps/api/src/routes/players.ts). Percentiles are **empirical** `percent_rank` (Statcast MVs) or **midrank** among small FanGraphs cohorts (fielding, FG season rates), refreshed after loads (see [sql-examples.md](./sql-examples.md)).
 
@@ -16,8 +16,8 @@ Versioned definitions for [`GET /players/:id/league-percentiles`](../apps/api/sr
 
 | Family | `lower_better` examples | `higher_better` examples |
 |--------|-------------------------|---------------------------|
-| Batting (process) | Chase %, Whiff %, K% (FG) | BB% (FG), xwOBA (FG), AVG/SLG (FG), exit velo, barrel %, hard-hit %, sweet-spot %, bat speed, xBA on contact (Statcast mean) |
-| Pitching (process) | xERA (FG), BB% (FG), exit velo allowed, barrel/hard-hit/xBA allowed, HR% | K% (FG), Chase %, Whiff %, SwStr %, Zone %, GB % (framed as pitcher skill), FB velo, extension |
+| Batting (process) | Chase %, Whiff %, K% (FG) | BB% (FG), xwOBA / wOBA / wRC+ (FG), AVG/SLG (FG), exit velo, barrel %, hard-hit %, sweet-spot %, bat speed, xBA on contact (Statcast mean) |
+| Pitching (process) | xERA (FG), xFIP (FG), BB% (FG), exit velo allowed, barrel/hard-hit/xBA allowed, HR% | K% (FG), Chase %, Whiff %, SwStr %, Zone %, GB % (framed as pitcher skill), FB velo, extension |
 | Fielding | — (runs saved: higher better) | DRS, UZR, OAA (FG), FRV |
 | Running | — | Sprint speed |
 
@@ -56,10 +56,11 @@ LIMIT 120;
 | Section | Returned when | Notes |
 |---------|----------------|-------|
 | `percentiles` | Batter (Statcast core) | Backward-compatible; same slots as before + `direction` |
-| `savant_batting` | Batter | FG season + Statcast core + Savant BIP MV |
+| `savant_batting` | Batter | FG season (xwOBA, wOBA, wRC+, slash, ISO, value runs) + Statcast core + Savant BIP MV |
 | `savant_running` | Batter, Fielding | Sprint table; omitted if empty / missing |
 | `season.percentiles` | Pitcher | Statcast season totals + `direction` |
-| `savant_pitching` | Pitcher | FG season (xERA, K%, BB%) + Statcast season + Savant BIP allowed MV |
+| `savant_pitching` | Pitcher | FG season (WAR FIP/RA9, xERA, xFIP, K%, BB%) + Statcast season + Savant BIP allowed MV |
+| `savant_catching` | Fielding | Catcher framing/blocking/CS/pop when FG `stats_jsonb` exposes numeric keys (see catcher extractor); omitted if empty |
 | `by_pitch_type` | Pitcher | Unchanged grain `(game_year, pitcher_mlbam, pitch_type)` |
 | `percentiles` | Fielding | Same slots as **`fielding_percentile_groups`[0]** (season **total** block) |
 | `savant_fielding` | Fielding | Copy of **`percentiles`** (card UI reads `fielding_percentile_groups` when present) |
@@ -79,6 +80,7 @@ LIMIT 120;
 | `swing_avg_bat_speed` … `swing_avg_path_tilt` | JSON means | `tracked_swings ≥ 25` | same |
 | `bat_chase_pct` | Swings OOZ ÷ pitches OOZ (known zone) | `pitches_seen ≥ 400` | same |
 | `bat_whiff_pct` | Whiffs ÷ swings | `swings ≥ 150` | same |
+| `bip_ev90` | 90th percentile `launch_speed` on BIP (`percentile_disc(0.9)`) | `bbe ≥ 50` | same |
 
 ### B) Savant BIP extras (`statcast_batter_season_savant_bip_mv`)
 
@@ -88,19 +90,24 @@ LIMIT 120;
 | `bip_sweet_spot_pct` | Share of BIP with launch angle **8–32°** | `bbe ≥ 50` | same |
 | `bip_avg_estimated_ba` | Mean `estimated_ba_using_speedangle` on BIP | `bbe_with_est_ba ≥ 50` | same |
 
-### C) FanGraphs batting season (`fg_batting_season_mlb_merged_rates` view, Flyway V19)
+### C) FanGraphs batting season (`fg_batting_season_mlb_merged_rates` view, Flyway V19 + **V33** wOBA/wRC+)
 
 PA-weighted typed columns from **`fg_batting_season_current`** (same TOT/split merge as consolidated). **`player_id`** is `MAX(COALESCE(row.player_id, lookup from player_external_identifier))` (**Flyway V20**) so percentiles work before FG ETL backfills `fg_*_season.player_id`. **K%** uses typed `k_pct`, falling back to **`k_pct_from_so`** (SO÷PA from `stats_jsonb`) when the typed rate is missing.
 
 | Metric id | Definition | Player qualifies | Cohort |
 |-----------|------------|------------------|--------|
 | `fg_season_xwoba` | PA-weighted `xwOBA` | `pa ≥ 200` (prorated from **max MLB player games**), **or** `pa ≥ round(0.1 · that bar)` for early `qualified` (`battingFgSeasonEarlyQualifiedPa`) | **Relaxed** `pa` floor for midrank only: `min(N, ⌊0.52·N⌋)` with prorated `N` (API `cohortPeerFloorForQualifiedMin`). |
+| `fg_season_woba` | PA-weighted `wOBA` (**V33**) | same early `qualified` rule | same relaxed floor |
+| `fg_season_wrc_plus` | PA-weighted `wRC+` (**V33**) | same early `qualified` rule | same relaxed floor |
 | `fg_season_k_pct` | `k_pct` or SO/PA fallback (×100 in API for display) | same early `qualified` rule as `fg_season_xwoba` | same relaxed floor |
 | `fg_season_bb_pct` | PA-weighted `bb_pct` | same | same relaxed floor |
 | `fg_season_avg` | PA-weighted `AVG` | same | same relaxed floor |
 | `fg_season_slg` | PA-weighted `SLG` | same | same relaxed floor |
+| `fg_season_iso` | **ISO** = `season_slg − season_avg` on merged rates row | same | same relaxed floor |
 
-**Note:** FG **AVG/SLG** are FanGraphs slash (PA-weighted across splits). **xBA on contact** remains `bip_avg_estimated_ba` from Statcast.
+**Value block (midrank from `fg_batting_season_mlb_consolidated`):** `fg_season_bsr`, `fg_season_off`, `fg_season_def`, `fg_season_bat_war` — season sums after TOT merge; same PA qualification / relaxed cohort floor as other FG batting metrics.
+
+**Note:** FG **AVG/SLG** are FanGraphs slash (PA-weighted across splits). **`fg_season_iso`** uses the same merged PA-weighted **AVG** and **SLG** as SLG − AVG (FanGraphs ISO). **xBA on contact** remains `bip_avg_estimated_ba` from Statcast.
 
 ---
 
@@ -121,15 +128,18 @@ Same definitions as **2026.1** (chase/whiff/zone, EV allowed, GB%, extension, FF
 | `pitch_avg_estimated_ba_allowed` | Mean estimated BA on BIP allowed | `bbe_with_est_ba ≥ 50` | same |
 | `pitch_hard_hit_pct_allowed` | Hard-hit% allowed (EV ≥ 95) | `bbe ≥ 50` | same |
 
-### C) FanGraphs pitching season (`fg_pitching_season_mlb_merged_stats`, Flyway V17 + V20)
+### C) FanGraphs pitching season (`fg_pitching_season_mlb_merged_stats`, Flyway V17 + V20 + **V32** xFIP)
 
-**xERA**, **K%**, **BB%**, and qualification **TBF** all use `fg_pitching_season_mlb_merged_stats`: TBF-based rates from merged MLB rows, IP-weighted xERA with typed **`MAX(xera)`** fallback when IP-outs are missing (**V20**). **`player_id`** resolves via `player_external_identifier` when null on FG rows (**V20**). The consolidated MV alone is not used here—its `player_id` is only `MAX(fg_pitching_season_current.player_id)`, so pitchers missing that backfill had no row for `player_id = :id` lookups. **Qualification** uses the prorated TBF floor (e.g. 150 full season); **midrank cohorts** for xERA/K%/BB% use a **relaxed** TBF floor `min(N, ⌊0.52·N⌋)` with the same prorated `N` so early-season percentiles are not unstable 0/100 tails against a handful of high-workload arms only (**2026.4**).
+**xERA**, **xFIP**, **K%**, **BB%**, and qualification **TBF** all use `fg_pitching_season_mlb_merged_stats`: TBF-based rates from merged MLB rows, IP-weighted xERA / xFIP with typed **`MAX(xera)`** / **`MAX(xfip)`** fallback when IP-outs are missing (**V20**, **V32**). **`player_id`** resolves via `player_external_identifier` when null on FG rows (**V20**). The consolidated MV alone is not used here—its `player_id` is only `MAX(fg_pitching_season_current.player_id)`, so pitchers missing that backfill had no row for `player_id = :id` lookups. **Qualification** uses the prorated TBF floor (e.g. 150 full season); **midrank cohorts** for xERA/xFIP/K%/BB% use a **relaxed** TBF floor `min(N, ⌊0.52·N⌋)` with the same prorated `N` so early-season percentiles are not unstable 0/100 tails against a handful of high-workload arms only (**2026.4**).
 
 | Metric id | Source |
 |-----------|--------|
 | `fg_season_pit_xera` | `fg_pitching_season_mlb_merged_stats.xera` |
+| `fg_season_pit_xfip` | `fg_pitching_season_mlb_merged_stats.xfip` |
 | `fg_season_pit_k_pct` | `fg_pitching_season_mlb_merged_stats.k_pct` |
 | `fg_season_pit_bb_pct` | `fg_pitching_season_mlb_merged_stats.bb_pct` |
+
+**Value block:** `fg_season_pit_war_fip` ← summed typed **`war`** (FIP-based); `fg_season_pit_war_ra9` ← sum over merged rows of `COALESCE(stats_jsonb 'RA9-WAR' / 'RA9 WAR', typed **`war_ra9`)** per row (**V34**). When the JSON keys are absent, RA9-WAR still flows from ETL’s **`war_ra9`** column on `fg_pitching_season`. Same TBF qualification as other FG pitching metrics.
 
 ### D) Pitch-type (`statcast_pitcher_season_pitchtype_percentile_mv`)
 
@@ -161,6 +171,6 @@ pnpm db:refresh-percentiles
 
 Refreshes **V15** percentile MVs and **V16** Savant BIP MVs (`scripts/refresh-statcast-percentile-mvs.sql`). **FanGraphs** consolidated MVs refresh on FG ETL (unchanged).
 
-**Flyway:** V15 (core percentiles), V16 (Savant BIP + sprint table), V17 (FG pitching merged stats **view**), **V18** (pitcher season totals MV: adds `val_*` process columns), **V19** (`fg_batting_season_mlb_merged_rates`), **V20** (FG merge views resolve `player_id` via `player_external_identifier` fangraphs + xERA fallback when IP-weighted xERA is null), **V21** (`player_season_running_splits` for Savant 90 ft splits ingest).
+**Flyway:** V15 (core percentiles), V16 (Savant BIP + sprint table), V17 (FG pitching merged stats **view**), **V18** (pitcher season totals MV: adds `val_*` process columns), **V19** (`fg_batting_season_mlb_merged_rates`), **V20** (FG merge views resolve `player_id` via `player_external_identifier` fangraphs + xERA fallback when IP-weighted xERA is null), **V21** (`player_season_running_splits` for Savant 90 ft splits ingest), **V32** (IP-weighted **xFIP** on `fg_pitching_season_mlb_merged_stats`), **V33** (PA-weighted **wOBA** / **wRC+** on `fg_batting_season_mlb_merged_rates`), **V34** (RA9-WAR merge: **typed `war_ra9` fallback** when `stats_jsonb` keys missing).
 
 **API contract test:** `pnpm --filter @mlbapp/api test` runs `leaguePercentilesPayload.spec.mjs` against `buildPercentileSlot`.

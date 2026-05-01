@@ -111,6 +111,18 @@ export async function enrichBatterStatcastMvHypotheticals(
       [game_year, bbePeerFloor, slots.bip_hard_hit_pct!.value]
     )
   );
+  jobs.push(
+    run(
+      'bip_ev90',
+      `SELECT COUNT(*)::int AS n,
+              COUNT(*) FILTER (WHERE v < $3::float8)::int AS below,
+              COUNT(*) FILTER (WHERE v = $3::float8)::int AS tied
+       FROM (SELECT val_bip_ev90::float8 AS v
+             FROM statcast_batter_season_percentile_mv
+             WHERE game_year = $1 AND bbe >= $2 AND val_bip_ev90 IS NOT NULL) s`,
+      [game_year, bbePeerFloor, slots.bip_ev90!.value]
+    )
+  );
 
   for (const [key, col] of [
     ['swing_avg_bat_speed', 'val_swing_avg_bat_speed'],
