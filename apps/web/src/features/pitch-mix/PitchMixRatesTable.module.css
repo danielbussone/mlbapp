@@ -1,0 +1,20 @@
+.helpSpan {
+  cursor: help;
+  text-decoration: underline dotted;
+}
+
+.pitchCell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pitchSwatch {
+  min-width: 22px;
+  width: 22px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}

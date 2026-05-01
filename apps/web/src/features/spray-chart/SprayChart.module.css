@@ -1,0 +1,34 @@
+.emptyLead {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.wrap560 {
+  width: 100%;
+  max-width: 560px;
+}
+
+.title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.svgField {
+  width: 100%;
+  margin-inline: auto;
+  max-height: 560px;
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  overflow: hidden;
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  background-color: transparent;
+}
+
+.legendRow {
+  margin-top: var(--mui-spacing-1, 8px);
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}

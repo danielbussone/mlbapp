@@ -1,0 +1,95 @@
+.container {
+  padding-block: var(--mui-spacing-3, 24px);
+}
+
+.backLink {
+  margin-bottom: var(--mui-spacing-2, 16px);
+}
+
+.pageTitle {
+  font-weight: 600;
+}
+
+.intro {
+  margin-bottom: var(--mui-spacing-3, 24px);
+}
+
+.wirePaper {
+  overflow: hidden;
+}
+
+.wireHeader {
+  padding: var(--mui-spacing-1, 8px) var(--mui-spacing-2, 16px);
+  font-weight: 600;
+  background-color: var(--mui-palette-grey-100, #f5f5f5);
+}
+
+.wireGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  min-height: 280px;
+}
+
+@media (min-width: 900px) {
+  .wireGrid {
+    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr);
+  }
+}
+
+.wireLeft {
+  padding: var(--mui-spacing-2, 16px);
+  border-right: none;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+@media (min-width: 900px) {
+  .wireLeft {
+    border-right-width: 1px;
+    border-right-style: solid;
+  }
+}
+
+.wireRight {
+  padding: var(--mui-spacing-2, 16px);
+  background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+}
+
+.nameBlock {
+  margin-top: var(--mui-spacing-1, 8px);
+}
+
+.roleLine {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.chipRow {
+  margin-bottom: var(--mui-spacing-2, 16px);
+}
+
+.fgPlaceholder {
+  /* theme.spacing(1.5) */
+  padding: 12px;
+  background-color: var(--mui-palette-grey-50, #fafafa);
+}
+
+.fgMono {
+  margin-top: var(--mui-spacing-1, 8px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.wireCaption {
+  display: block;
+  margin-top: var(--mui-spacing-1, 8px);
+}
+
+.placeholderPlot {
+  margin-top: var(--mui-spacing-2, 16px);
+  height: 200px;
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  border: 1px dashed;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

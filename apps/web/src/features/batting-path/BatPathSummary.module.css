@@ -1,0 +1,19 @@
+.title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.lead {
+  display: block;
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+/**
+ * Column count is set in `BatPathSummary.tsx` from **container** width (ResizeObserver),
+ * not the viewport — so chat + player card can stack 1×4 while the window stays wide.
+ */
+.grid {
+  display: grid;
+  gap: var(--mui-spacing-1, 8px);
+  min-width: 0;
+}

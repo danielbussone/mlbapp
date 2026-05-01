@@ -1,0 +1,75 @@
+.emptyWrap {
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+  padding-block: var(--mui-spacing-1, 8px);
+}
+
+.emptyTitle {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.movementRoot {
+  display: grid;
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  column-gap: var(--mui-spacing-1, 8px);
+  row-gap: 6px;
+}
+
+.gridTitle {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  font-weight: 600;
+}
+
+.yAxis {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.yAxisCaption {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+
+.plotCell {
+  grid-column: 2;
+  grid-row: 2;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 1;
+  min-height: 280px;
+  max-height: min(92vw, 520px);
+}
+
+@media (min-width: 600px) {
+  .plotCell {
+    min-height: 340px;
+  }
+}
+
+@media (min-width: 900px) {
+  .plotCell {
+    min-height: 400px;
+    max-height: 580px;
+  }
+}
+
+.xAxisCaption {
+  grid-column: 2;
+  grid-row: 3;
+  text-align: center;
+  justify-self: stretch;
+}

@@ -37,6 +37,7 @@ import {
 } from '../repos/statcast.js';
 import { statcastFieldingOaaCells } from '../repos/statcastFielding.js';
 import { getLeaguePercentilesForPlayer } from '../repos/leaguePercentiles.js';
+import { getJawsExpanded } from '../repos/jawsExpanded.js';
 
 const fgSeasonQuerySchema = z.object({
   role: z.enum(['batting', 'pitching']),
@@ -118,6 +119,10 @@ const fgBattingCardQuerySchema = z.object({
   /** Consolidated season rows (newest first); capped in repo at 100. */
   last_seasons: z.coerce.number().int().min(1).max(100).optional().default(100),
   for_season: z.coerce.number().int().min(1900).max(2100).optional(),
+});
+
+const jawsExpandedQuerySchema = z.object({
+  role: z.enum(['batting', 'pitching']),
 });
 
 function parsePlayerId(raw: string | undefined): number | null {
@@ -416,6 +421,43 @@ export function registerPlayersRoutes(app: FastifyInstance) {
         return;
       }
       const payload = await getFgRoleHintPayload(pool, playerId);
+      reply.send(payload);
+    } catch (e) {
+      req.log.error(e);
+      reply.code(500).send({ error: 'Database error' });
+    }
+  });
+
+  /**
+   * BRef-style JAWS block (fWAR): career / 7yr-peak / JAWS / WAR·162, midrank vs HoF at primary
+   * position (materialized view), and mean HoF stats at that position (Lahman HOF table).
+   */
+  app.get('/players/:playerId/jaws-expanded', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!hasDatabaseUrl()) {
+      dbUnavailable(reply);
+      return;
+    }
+    const playerId = parsePlayerId((req.params as { playerId?: string }).playerId);
+    if (playerId == null) {
+      reply.code(400).send({ error: 'Invalid playerId' });
+      return;
+    }
+    const parsed = jawsExpandedQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      reply.code(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const pool = getPool();
+      const exists = await getPlayerById(pool, playerId);
+      if (!exists) {
+        reply.code(404).send({ error: 'Player not found' });
+        return;
+      }
+      const payload = await getJawsExpanded(pool, {
+        player_id: playerId,
+        role: parsed.data.role,
+      });
       reply.send(payload);
     } catch (e) {
       req.log.error(e);

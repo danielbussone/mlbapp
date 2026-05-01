@@ -1,0 +1,29 @@
+.sectionTitle {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.toolRow {
+  margin-bottom: 4px;
+}
+
+.helpCaption {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.subsectionTitle {
+  font-weight: 600;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.subsectionTitleSpaced {
+  font-weight: 600;
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
+.indentCell {
+  padding-left: 20px;
+}

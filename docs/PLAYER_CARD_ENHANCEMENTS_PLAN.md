@@ -31,10 +31,10 @@ This file is the **repository copy** so agents and reviewers can cite a stable p
 
 | Area | Where it lives | Notes |
 |------|----------------|-------|
-| Bio | [`PlayerCardPanel.tsx`](../apps/web/src/PlayerCardPanel.tsx) (~884–926) | Name, born chip, FG position + team chips, MLBAM |
-| FanGraphs “By season (MLB)” | Same file + [`BattingCardTable`](../apps/web/src/PlayerCardPanel.tsx) (~287–330) / [`PitchingCardTable`](../apps/web/src/pitcherFgTables.tsx) (~142–185) | `seasonLabel` is `String(season)` for season rows (`batterFgTables.ts`), **no** linkage to URL season for row styling |
-| Statcast stack order | [`PlayerCardPanel.tsx`](../apps/web/src/PlayerCardPanel.tsx) (~1062–1184) | **Pitching:** `LeaguePercentilesPanel` → Pitch mix → movement. **Batting:** percentiles → BBE chips → bat path → spray |
-| Fielding OAA viz | [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/OaaHeatmapPlaceholder.tsx), table [`savant_fielding_oaa_cell`](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql) | Flex-wrap squares; **not** a field overlay. [§3 MLB Stats API](./data-sources/http-and-official-apis.md) (`GET /api/v1/people/{id}`) |
+| Bio | [`PlayerCardPanel.tsx`](../apps/web/src/features/player-card/PlayerCardPanel.tsx) (~884–926) | Name, born chip, FG position + team chips, MLBAM |
+| FanGraphs “By season (MLB)” | Same file + [`BattingCardTable`](../apps/web/src/features/player-card/PlayerCardPanel.tsx) (~287–330) / [`PitchingCardTable`](../apps/web/src/features/pitch-mix/pitcherFgTables.tsx) (~142–185) | `seasonLabel` is `String(season)` for season rows ([`batterFgTables.ts`](../apps/web/src/lib/batterFgTables.ts)), **no** linkage to URL season for row styling |
+| Statcast stack order | [`PlayerCardPanel.tsx`](../apps/web/src/features/player-card/PlayerCardPanel.tsx) (~1062–1184) | **Pitching:** `LeaguePercentilesPanel` → Pitch mix → movement. **Batting:** percentiles → BBE chips → bat path → spray |
+| Fielding OAA viz | [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/features/fielding-oaa/OaaHeatmapPlaceholder.tsx), table [`savant_fielding_oaa_cell`](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql) | Flex-wrap squares; **not** a field overlay. [§3 MLB Stats API](./data-sources/http-and-official-apis.md) (`GET /api/v1/people/{id}`) |
 | Warehoused identity | [`dim_player`](../db/sql/V2__domain_schema.sql) + [`getPlayersByIds`](../apps/api/src/repos/players.ts) | Only `birth_date`, names, `key_mlbam` (+ externals)—**no** height/weight/draft in schema today |
 
 ---
@@ -81,14 +81,14 @@ A **nightly cron** that calls Stats API and upserts a table is arguably snapshot
 
 ## 2. Highlight selected season in “By season (MLB)”
 
-- Pass **`season`** into [`BattingCardTable`](../apps/web/src/PlayerCardPanel.tsx) and [`PitchingCardTable`](../apps/web/src/pitcherFgTables.tsx).
+- Pass **`season`** into [`BattingCardTable`](../apps/web/src/features/player-card/PlayerCardPanel.tsx) and [`PitchingCardTable`](../apps/web/src/features/pitch-mix/pitcherFgTables.tsx).
 - For each row where `line.seasonLabel !== 'Career'` and `Number(line.seasonLabel) === season`, apply subtle styling: e.g. `bgcolor: 'action.selected'` or left border + slightly stronger font weight (keep **Career** row visually distinct).
 
 ---
 
 ## 3. Percentiles position (move below other graphs)
 
-In the Statcast `Stack` for **batting** and **pitching** ([`PlayerCardPanel.tsx`](../apps/web/src/PlayerCardPanel.tsx) ~1062–1184):
+In the Statcast `Stack` for **batting** and **pitching** ([`PlayerCardPanel.tsx`](../apps/web/src/features/player-card/PlayerCardPanel.tsx) ~1062–1184):
 
 - **Batting:** Order → BBE chips (optional) → **BatPathSummary** → **SprayChart** → link → **`LeaguePercentilesPanel` last**.
 - **Pitching:** Order → **Pitch mix** (+ extended table path) → **MovementMiniPlot** → link → **`LeaguePercentilesPanel` last**.
@@ -103,13 +103,13 @@ In the Statcast `Stack` for **batting** and **pitching** ([`PlayerCardPanel.tsx`
   - Prefer **MUI** `Accordion` with `defaultExpanded` **true**, or **Card + Collapse** + `IconButton` for symmetry with existing Statcast rail chevrons.
 - Optional: persist expansion in **`localStorage`** under a versioned key (e.g. `mlbapp.playerCard.sections.v1`) so power users keep their layout; default **all expanded** per your spec.
 
-Extracting a tiny **`CollapsibleSection`** component in [`PlayerCardPanel.tsx`](../apps/web/src/PlayerCardPanel.tsx) or `CollapsibleChartSection.tsx` keeps the panel readable and avoids duplicating accessibility labels.
+Extracting a tiny **`CollapsibleSection`** component in [`PlayerCardPanel.tsx`](../apps/web/src/features/player-card/PlayerCardPanel.tsx) or `CollapsibleChartSection.tsx` keeps the panel readable and avoids duplicating accessibility labels.
 
 ---
 
 ## 5. OAA defense heat map — what is still needed
 
-**Already in place:** ingest target [`savant_fielding_oaa_cell`](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql); UI shell [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/OaaHeatmapPlaceholder.tsx) (`GET /api/players/:id/fielding-oaa`); compliance note in [`PLAYER_CARDS_V2.md`](./PLAYER_CARDS_V2.md) §“OAA heat map grid”.
+**Already in place:** ingest target [`savant_fielding_oaa_cell`](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql); UI shell [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/features/fielding-oaa/OaaHeatmapPlaceholder.tsx) (`GET /api/players/:id/fielding-oaa`); compliance note in [`PLAYER_CARDS_V2.md`](./PLAYER_CARDS_V2.md) §“OAA heat map grid”.
 
 **Spec location:** Full checklist, data contract, and geometry notes live in [`PLAYER_CARDS_V2.md`](./PLAYER_CARDS_V2.md) § **OAA defense field heat map — remaining work** (under **OAA heat map grid**).
 
@@ -117,7 +117,7 @@ Extracting a tiny **`CollapsibleSection`** component in [`PlayerCardPanel.tsx`](
 
 1. **Approved data source** for per-cell OAA (Savant grid export)—same compliance thread as today’s placeholder ([`DATASETS.md`](./DATASETS.md)).
 2. **Cell vocabulary contract:** document **`cell_id` ↔ defensive responsibility zone** (e.g. Savant’s partition). Without a stable mapping, you cannot place cells on a field SVG.
-3. **Geometry layer:** reuse patterns from [`SprayChart.tsx`](../apps/web/src/SprayChart.tsx) (SVG field, Savant coordinate conventions) **or** official Savant diagram specs—define whether cells anchor to **infield-skew vs outfield-skew** grids per **primary position**.
+3. **Geometry layer:** reuse patterns from [`SprayChart.tsx`](../apps/web/src/features/spray-chart/SprayChart.tsx) (SVG field, Savant coordinate conventions) **or** official Savant diagram specs—define whether cells anchor to **infield-skew vs outfield-skew** grids per **primary position**.
 4. **Color scale:** diverging ramp **red = positive OAA**, **blue = negative OAA** (current placeholder uses hue 0 vs 220—align legend + accessibility / color-blind variant).
 5. **Directional narrative (“better to his right than left”):** requires either **mirror-aware** labeling (player stands facing plate—define L/R vs LF/RF line) or **paired aggregates** exported from upstream; purely geometric mapping from `cell_id` to wedge sectors may suffice once the grid matches physical space.
 6. **Attempts weighting:** opacity/size by attempts (already partially in placeholder) should carry over to the field view to avoid over-reading low-`attempts` cells.

@@ -1,0 +1,28 @@
+/**
+ * FanGraphs-style table shell: horizontal scroll + compact cell sizing.
+ * Compose spacing: fgTableWrapMb (player card tables) or fgTableWrapMt (tight blocks under labels).
+ */
+.fgTableWrap {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.fgTableWrapMb {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.fgTableWrapMt {
+  margin-top: 4px;
+}
+
+.fgTableDense td,
+.fgTableDense th {
+  white-space: nowrap;
+  font-size: 0.68rem;
+}
+
+.fgTableNormal td,
+.fgTableNormal th {
+  white-space: nowrap;
+  font-size: 0.75rem;
+}

@@ -158,14 +158,14 @@ Savant occasionally renames CSV columns. ETL should:
 
 ### 6.1 Infield OAA
 
-Today [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/OaaHeatmapPlaceholder.tsx) only treats **`of_dir_*`** as directional for `OaaDirectionalField`. Plan:
+Today [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/features/fielding-oaa/OaaHeatmapPlaceholder.tsx) only treats **`of_dir_*`** as directional for `OaaDirectionalField`. Plan:
 
-- **Dev prototype:** **`/dev/oaa-breakdown-prototype`** — [`OaaBreakdownPrototype.tsx`](../apps/web/src/OaaBreakdownPrototype.tsx): **OF** reuses shipped `OaaDirectionalField` with mock `of_dir_*`; **IF** uses mock `if_dir_*` via [`OaaIfDirectionalField.tsx`](../apps/web/src/OaaIfDirectionalField.tsx) (same four 90° wedge pie at **1B/3B** bags, **2B** second-baseman hole, **SS** hole; `INFIELD_DIAMOND_SCALE` fits the chalk diamond; RHH/LHH splits omitted).
+- **Dev prototype:** **`/dev/oaa-breakdown-prototype`** — [`OaaBreakdownPrototype.tsx`](../apps/web/src/features/fielding-oaa/OaaBreakdownPrototype.tsx): **OF** reuses shipped `OaaDirectionalField` with mock `of_dir_*`; **IF** uses mock `if_dir_*` via [`OaaIfDirectionalField.tsx`](../apps/web/src/features/fielding-oaa/OaaIfDirectionalField.tsx) (same four 90° wedge pie at **1B/3B** bags, **2B** second-baseman hole, **SS** hole; `INFIELD_DIAMOND_SCALE` fits the chalk diamond; RHH/LHH splits omitted).
 
 1. Detect **`if_dir_*`** (and optionally `if_split_*`) and branch to **Infield OAA** presentation:
    - **MVP:** compact **table** with Savant-aligned labels (In / Toward 3B line / Toward 1B line / Behind / RHB / LHB).
    - **V2:** small **infield diagram** (diamond + four wedges) reusing field SVG conventions from [PLAYER_CARDS_V2.md](./PLAYER_CARDS_V2.md) / spray geometry — document `cell_id` → angle/label map in-repo (e.g. `docs/fielding-oaa-cell-map.md`).
-2. **Primary role selection:** if both `of_dir_*` and `if_dir_*` exist for the same year (unusual but possible for dual-role samples), prefer branch by **FanGraphs primary position / max innings** (reuse patterns from [`primaryOutfield.js`](../apps/web/src/primaryOutfield.js) or parallel helper for IF vs OF).
+2. **Primary role selection:** if both `of_dir_*` and `if_dir_*` exist for the same year (unusual but possible for dual-role samples), prefer branch by **FanGraphs primary position / max innings** (reuse patterns from [`primaryOutfield.ts`](../apps/web/src/features/fielding-frv/primaryOutfield.ts) or parallel helper for IF vs OF).
 
 ### 6.2 FRV breakdown — Savant components (OF / IF / 1B / C)
 
@@ -231,7 +231,7 @@ Catching
 
 #### 6.2.3 Visualization mechanics (implementation hints)
 
-- **Interactive prototype (dev only):** **`/dev/frv-prototype`** — [`FrvBreakdownPrototype.tsx`](../apps/web/src/FrvBreakdownPrototype.tsx): **OF**, **SS** (IF Range+Arm+DP), **1B** (IF Range+DP), **C**, plus a **diamond exploration** block using [`FrvDiamondViz.tsx`](../apps/web/src/FrvDiamondViz.tsx) on **`public/spray/dodger-stadium-dimensions.png`** (same 100×100 viewBox as OAA / spray): **Range** as a fielder-centered circle (radius + red/blue hue), **Arm** as an arrow toward **home** (OF) or **1B** (IF), **DP** badge near 2B when `dp_runs` ≠ 0. Catcher row skips the diamond in this sketch (catching-only metrics).
+- **Interactive prototype (dev only):** **`/dev/frv-prototype`** — [`FrvBreakdownPrototype.tsx`](../apps/web/src/features/fielding-frv/FrvBreakdownPrototype.tsx): **OF**, **SS** (IF Range+Arm+DP), **1B** (IF Range+DP), **C**, plus a **diamond exploration** block using [`FrvDiamondViz.tsx`](../apps/web/src/features/fielding-frv/FrvDiamondViz.tsx) on **`public/spray/dodger-stadium-dimensions.png`** (same 100×100 viewBox as OAA / spray): **Range** as a fielder-centered circle (radius + red/blue hue), **Arm** as an arrow toward **home** (OF) or **1B** (IF), **DP** badge near 2B when `dp_runs` ≠ 0. Catcher row skips the diamond in this sketch (catching-only metrics).
 - **Diverging horizontal bar** per metric: shared scale (e.g. clamp display to ±max across components in view, or ±`max(|total_runs|, 15)` for readability); **negative = blue**, **zero = grey**, **positive = red** (or match existing OAA / run-value palette on the card).
 - **Alternative MVP:** single **table** (Metric | Runs) in the same group order as §6.2.2 — faster to ship; upgrade to bars in a follow-up.
 - **Accessibility:** each bar has `aria-label` with sign and value; table version has clear `th` scope.

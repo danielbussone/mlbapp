@@ -1,0 +1,108 @@
+--- 0) FG season / career inputs (not HoF-specific) ---
+ fg_batting_season_current_mlb_rows | fg_batting_season_mlb_consolidated_rows | fg_batting_career_mlb_view_rows | fg_pitching_season_current_mlb_rows | fg_pitching_season_mlb_consolidated_rows | fg_pitching_career_mlb_view_rows 
+------------------------------------+-----------------------------------------+---------------------------------+-------------------------------------+------------------------------------------+----------------------------------
+                              97281 |                                   97280 |                           20711 |                               52136 |                                    52133 |                            11805
+(1 row)
+
+--- 0b) player_id on FG career (null here ⇒ run ``pnpm etl:chadwick`` then Flyway V30+ or ``pnpm etl:fg -- --link-players``) ---
+ bat_career_with_player_id | bat_career_player_id_null | pit_career_with_player_id | pit_career_player_id_null | pei_fangraphs_rows 
+---------------------------+---------------------------+---------------------------+---------------------------+--------------------
+                     18179 |                      2532 |                     10499 |                      1306 |              20743
+(1 row)
+
+--- 1) hall_of_fame_player row counts ---
+ hof_rows | hof_with_player_id | hof_missing_player_id 
+----------+--------------------+-----------------------
+      256 |                254 |                     2
+(1 row)
+
+--- 2) Matview row counts (if 0, run pnpm db:refresh-fg-mviews after migrate + FG ETL) ---
+ batter_cohort_mv_rows | pitcher_cohort_mv_rows | batter_primary_pos_mv_rows | pitcher_primary_role_mv_rows 
+-----------------------+------------------------+----------------------------+------------------------------
+                  3378 |                   2856 |                      11033 |                         7886
+(1 row)
+
+--- 2) HoF batters in mv_fg_batter_jaws_cohort (any jaws_position_key) ---
+ hof_batters_in_cohort_mv 
+--------------------------
+                      158
+(1 row)
+
+--- 2b) HoF batters by jaws_position_key (cohort MV) ---
+ jaws_position_key | hof_players | rows_n 
+-------------------+-------------+--------
+ CF                |          61 |     61
+ 1B                |          26 |     26
+ 2B                |          20 |     20
+ SS                |          19 |     19
+ C                 |          16 |     16
+ 3B                |          15 |     15
+ DH                |           1 |      1
+(7 rows)
+
+--- 2c) ID overlap: HoF player_id vs FG career / cohort MV (why join can be 0) ---
+ cohort_batter_distinct_player_id | hof_with_fg_batting_career_row | hof_ids_that_appear_in_cohort_mv 
+----------------------------------+--------------------------------+----------------------------------
+                             3378 |                            229 |                              158
+(1 row)
+
+--- 3) HoF inductees with player_id missing from mv_fg_batter_jaws_cohort (limit 30) ---
+ lahman_player_id | player_id | inducted_year 
+------------------+-----------+---------------
+ hoffmtr01        |    230796 |          2018
+ morrija02        |    233859 |          2018
+ smoltjo01        |    380811 |          2015
+ martipe02        |    337653 |          2015
+ johnsra05        |    464389 |          2015
+ glavito02        |    399905 |          2014
+ maddugr01        |    416784 |          2014
+ blylebe01        |    267668 |          2011
+ gossari01        |     16868 |          2008
+ wilsoju99        |    464023 |          2006
+ brownra99        |      2570 |          2006
+ coopean99        |    241050 |          2006
+ torricr99        |     46557 |          2006
+ santolo99        |     31434 |          2006
+ suttlmu99        |    318783 |          2006
+ mackebi99        |    139279 |          2006
+ taylobe99        |    342343 |          2006
+ mendejo99        |    328506 |          2006
+ hillpe99         |     13528 |          2006
+ grantfr99        |     94315 |          2006
+ suttebr01        |    173413 |          2006
+ eckerde01        |    303522 |          2004
+ smithhi99        |    327799 |          2001
+ steartu99        |    223953 |          2000
+ ryanno01         |    149128 |          1999
+ willijo99        |    446174 |          1999
+ roganbu99        |    108154 |          1998
+ suttodo01        |    305965 |          1998
+ wellswi99        |    160852 |          1997
+ niekrph01        |    223789 |          1997
+(30 rows)
+
+--- 4) HoF pitchers in mv_fg_pitcher_jaws_cohort ---
+ hof_pitchers_in_cohort_mv 
+---------------------------
+                        73
+(1 row)
+
+--- 4b) HoF pitchers by jaws_position_key ---
+ jaws_position_key | hof_players 
+-------------------+-------------
+ SP                |          71
+ RP                |           2
+(2 rows)
+
+--- 5) Per-player (skipped if -v player_id not set) ---
+ player_id | primary_pos_mv | cohort_mv_position | peer_n_excluding_self | hof_at_position_incl_self 
+-----------+----------------+--------------------+-----------------------+---------------------------
+    660271 |                |                    |                     0 |                         0
+(1 row)
+
+--- 6) Pitching per-player (skipped if -v player_id not set) ---
+ player_id | resolved_role_key | peer_n_like_api 
+-----------+-------------------+-----------------
+    660271 |                   |               0
+(1 row)
+

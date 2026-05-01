@@ -1,0 +1,96 @@
+.percentileRow {
+  padding-block: 4px;
+}
+
+.metricLabel {
+  font-weight: 600;
+  cursor: help;
+  border-bottom: 1px dotted;
+  border-color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+  width: fit-content;
+}
+
+.valueRight {
+  text-align: right;
+}
+
+.sliderBlock {
+  padding-top: 10px;
+  padding-bottom: 4px;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  overflow: visible;
+}
+
+.sliderInner {
+  max-width: 100%;
+}
+
+.alertDense {
+  padding-block: 4px;
+}
+
+.panelCard {
+  margin-bottom: var(--mui-spacing-1, 8px);
+  padding: 10px;
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  background-color: var(--mui-palette-background-paper, #fff);
+}
+
+.panelTitle {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.sectionDivider {
+  margin-block: var(--mui-spacing-1, 8px);
+}
+
+.sectionCaption {
+  font-weight: 600;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.sectionCaptionLoose {
+  font-weight: 600;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.pitchTypeBlock {
+  margin-bottom: 4px;
+}
+
+.pitchTypeHeader {
+  min-height: 28px;
+}
+
+.iconTight {
+  padding: 2px;
+}
+
+.pitchTypeLabel {
+  font-weight: 600;
+}
+
+.indent {
+  padding-left: 28px;
+}
+
+.fieldingGroup {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.fieldingGroupTight {
+  margin-bottom: 0;
+}
+
+.fieldingSectionLabel {
+  font-weight: 600;
+  display: block;
+  margin-bottom: 4px;
+}

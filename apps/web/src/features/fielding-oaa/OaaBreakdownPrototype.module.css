@@ -1,0 +1,43 @@
+.page {
+  padding-block: var(--mui-spacing-3, 24px);
+  padding-inline: var(--mui-spacing-2, 16px);
+}
+
+@media (min-width: 600px) {
+  .page {
+    padding-inline: var(--mui-spacing-3, 24px);
+  }
+}
+
+.back {
+  margin-bottom: var(--mui-spacing-2, 16px);
+}
+
+.title {
+  font-weight: 700;
+}
+
+.lead {
+  margin-bottom: var(--mui-spacing-2, 16px);
+  max-width: 960px;
+}
+
+.sectionHeading {
+  margin-top: var(--mui-spacing-1, 8px);
+  margin-bottom: var(--mui-spacing-1, 8px);
+  font-weight: 600;
+}
+
+.sectionBody {
+  margin-bottom: 12px;
+  max-width: 900px;
+}
+
+.dividerMajor {
+  margin-block: var(--mui-spacing-4, 32px);
+}
+
+.subsectionTitle {
+  margin-bottom: var(--mui-spacing-1, 8px);
+  font-weight: 600;
+}

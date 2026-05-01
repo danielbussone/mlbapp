@@ -1,0 +1,18 @@
+/**
+ * Combo pitch-mix + velocity: shared `<td>/<th>` look for the two abutted tables only.
+ * Layout, row heights, and `HandednessRowCell` stay on `sx` in TSX (see `main` history).
+ */
+
+.comboHandMerged td,
+.comboHandMerged th {
+  font-size: 0.8125rem;
+  vertical-align: middle;
+  border-right: none;
+}
+
+.comboVeloMerged td,
+.comboVeloMerged th {
+  font-size: 0.8125rem;
+  vertical-align: middle;
+  border-left: none;
+}

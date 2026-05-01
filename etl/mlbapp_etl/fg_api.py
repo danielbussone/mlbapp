@@ -215,6 +215,11 @@ def normalize_api_batting_df(df: pd.DataFrame) -> pd.DataFrame:
         out["Def"] = out["Defense"]
     if "wBsR" in out.columns:
         out["BsR"] = out["wBsR"]
+    if "Pos" not in out.columns:
+        for alt in ("position", "Position", "POS", "PlayerPosition"):
+            if alt in out.columns:
+                out["Pos"] = out[alt]
+                break
     return out
 
 

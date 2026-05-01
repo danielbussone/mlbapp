@@ -100,6 +100,14 @@ JSON uses **numbers** for numerics; FG `*_pct` fields remain **decimals** in JSO
 
 **200:** array of FG row objects matching `BATTING_COLS` or `PITCHING_COLS` from [`fangraphsSeason.ts`](../apps/api/src/repos/fangraphsSeason.ts) (including `rate_stat_qualified`, `stats_jsonb`, `ingest_pulled_at`).
 
+### `GET /api/players/:playerId/jaws-expanded` → `GET /players/:playerId/jaws-expanded`
+
+| Query | Notes |
+|-------|--------|
+| `role=batting\|pitching` | required |
+
+**200:** BRef-style **expanded JAWS** payload (FanGraphs **fWAR** only): `player` (career WAR, 7yr-peak WAR = **sum** of seven best season WAR, JAWS, WAR/162), `cohort` (midrank **vs Hall of Famers** at the same **primary position** or SP/RP bucket; position bucket from **V28** matviews when present, else cohort MV), `hof_average` (mean career / peak / JAWS / WAR·162 for Hall of Famers at that position from `hall_of_fame_player` + JAWS cohort MV), and `notes`. Requires Flyway **V25–V29**, `pnpm etl:hall-of-fame`, `pnpm etl:chadwick`, and FanGraphs MV refresh. See [`jawsExpanded.ts`](../apps/api/src/repos/jawsExpanded.ts).
+
 ### `GET /api/players/:playerId/statcast-summary` → `GET /players/:playerId/statcast-summary`
 
 | Query | Notes |
@@ -166,7 +174,7 @@ curl -s "http://127.0.0.1:3001/players/1/statcast-summary?role=pitcher&game_year
 | Statcast ETL | [`../etl/mlbapp_etl/statcast.py`](../etl/mlbapp_etl/statcast.py) |
 | FG / Statcast repos | [`../apps/api/src/repos/fangraphsSeason.ts`](../apps/api/src/repos/fangraphsSeason.ts), [`../apps/api/src/repos/statcast.ts`](../apps/api/src/repos/statcast.ts) |
 | Chat tools (reference queries) | [`../apps/api/src/tools/registry.ts`](../apps/api/src/tools/registry.ts) |
-| Player REST (cards + MLBAM lookup) | [`../apps/api/src/routes/players.ts`](../apps/api/src/routes/players.ts), [`../apps/web/src/PlayerMlbamRedirect.tsx`](../apps/web/src/PlayerMlbamRedirect.tsx) |
+| Player REST (cards + MLBAM lookup) | [`../apps/api/src/routes/players.ts`](../apps/api/src/routes/players.ts), [`../apps/web/src/pages/PlayerMlbamRedirect.tsx`](../apps/web/src/pages/PlayerMlbamRedirect.tsx) |
 | FG column visual lock | [`./reference/fg-player-page-v1/README.md`](./reference/fg-player-page-v1/README.md) |
 
 ---
@@ -305,7 +313,7 @@ Player cards are intended to use **REST + repos** (or equivalent) **outside** th
 
 **Goal:** Critique layout and empty states before wiring §7 APIs.
 
-**Shipped in repo:** **Live card:** [`PlayerCardPage`](../apps/web/src/PlayerCardPage.tsx) at **`/players/:playerId`** (e.g. [http://localhost:5173/players/484574?season=2024&role=batting](http://localhost:5173/players/484574?season=2024&role=batting)) — loads [`/api/players/...`](../apps/api/src/routes/players.ts). **Static wireframe (dev only):** [http://localhost:5173/dev/cards-wireframe](http://localhost:5173/dev/cards-wireframe) via [`../apps/web/src/main.tsx`](../apps/web/src/main.tsx).
+**Shipped in repo:** **Live card:** [`PlayerCardPage`](../apps/web/src/pages/PlayerCardPage.tsx) at **`/players/:playerId`** (e.g. [http://localhost:5173/players/484574?season=2024&role=batting](http://localhost:5173/players/484574?season=2024&role=batting)) — loads [`/api/players/...`](../apps/api/src/routes/players.ts). **Static wireframe (dev only):** [http://localhost:5173/dev/cards-wireframe](http://localhost:5173/dev/cards-wireframe) via [`../apps/web/src/app/main.tsx`](../apps/web/src/app/main.tsx).
 
 **Alternatives:** Figma frames mirroring §13; Storybook (not configured in this monorepo today).
 

@@ -18,8 +18,13 @@ only small offline samples.
 
 After a successful write (non-dry-run), **refreshes** the materialized views
 ``fg_batting_season_mlb_consolidated`` / ``fg_pitching_season_mlb_consolidated``
-(``REFRESH … CONCURRENTLY`` when the matching facet loaded; Flyway **V13**).
+(``REFRESH … CONCURRENTLY`` when the matching facet loaded; Flyway **V13**),
+then JAWS matviews when present (**V26** cohort, **V28** primary position / role, **V27** peak sum).
 Use ``--skip-consolidated-mview-refresh`` to skip (e.g. bulk backfill scripts).
+From repo root you can refresh the same matviews without HTTP ingest:
+``pnpm db:refresh-fg-mviews`` (see ``scripts/run-refresh-fg-mviews.sh``).
+
+With **no** ``--start-season`` / ``--end-season``, the CLI defaults to **1871** through the **current calendar year** (full historical load; may take a long time with default throttling). Pass a narrow range for incremental loads, e.g. ``--start-season 2024 --end-season 2024``.
 
 Environment: ``DATABASE_URL`` (Postgres DSN) except with ``--dry-run``.
 If unset, the ETL reads ``<repo>/.env`` like the Node apps (no override of
@@ -37,10 +42,12 @@ import json
 import os
 import sys
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import psycopg
+import psycopg.errors
 import requests
 from psycopg.types.json import Json
 
@@ -62,6 +69,9 @@ from mlbapp_etl.fg_api import (
 from mlbapp_etl.fg_qualify import batting_rate_stat_qualified, pitching_rate_stat_qualified
 from mlbapp_etl.jsonutil import row_to_stats_json
 from mlbapp_etl.runtime import load_repo_dotenv
+
+# Default lower bound when ``pnpm etl:fg`` is run with no season flags (major-league FG history).
+_DEFAULT_FG_START_SEASON = 1871
 
 
 def _repo_root() -> Path:
@@ -91,6 +101,38 @@ def refresh_fg_consolidated_mviews(
                     "REFRESH MATERIALIZED VIEW CONCURRENTLY fg_pitching_season_mlb_consolidated"
                 )
                 refreshed.append("fg_pitching_season_mlb_consolidated")
+            for mv_sql, mv_name, facet in (
+                (
+                    "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_fg_batter_jaws_primary_pos",
+                    "mv_fg_batter_jaws_primary_pos",
+                    "batting",
+                ),
+                (
+                    "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_fg_batter_jaws_cohort",
+                    "mv_fg_batter_jaws_cohort",
+                    "batting",
+                ),
+                (
+                    "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_fg_pitcher_jaws_primary_role",
+                    "mv_fg_pitcher_jaws_primary_role",
+                    "pitching",
+                ),
+                (
+                    "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_fg_pitcher_jaws_cohort",
+                    "mv_fg_pitcher_jaws_cohort",
+                    "pitching",
+                ),
+            ):
+                if facet == "batting" and not load_batting:
+                    continue
+                if facet == "pitching" and not load_pitching:
+                    continue
+                try:
+                    cur.execute(mv_sql)
+                    refreshed.append(mv_name)
+                except psycopg.errors.UndefinedTable:
+                    # Flyway not applied yet (e.g. V28 primary matviews)
+                    pass
     return refreshed
 
 
@@ -505,8 +547,26 @@ def main(argv: list[str] | None = None) -> None:
     argv = normalize_cli_argv(argv)
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--start-season", type=int, required=True)
-    parser.add_argument("--end-season", type=int, default=None)
+    parser.add_argument(
+        "--start-season",
+        type=int,
+        default=None,
+        metavar="YEAR",
+        help=(
+            f"First season (inclusive). Omit for full historical load ({_DEFAULT_FG_START_SEASON} "
+            "through --end-season or current year)."
+        ),
+    )
+    parser.add_argument(
+        "--end-season",
+        type=int,
+        default=None,
+        metavar="YEAR",
+        help=(
+            "Last season (inclusive). If omitted: same as --start-season when you passed "
+            "--start-season; otherwise the current calendar year (when --start-season is also omitted)."
+        ),
+    )
     parser.add_argument(
         "--league",
         default="all",
@@ -555,7 +615,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--notes", default=None)
     ns = parser.parse_args(argv)
 
-    end_season = ns.end_season if ns.end_season is not None else ns.start_season
+    start_season = _DEFAULT_FG_START_SEASON if ns.start_season is None else ns.start_season
+    if ns.end_season is not None:
+        end_season = ns.end_season
+    elif ns.start_season is not None:
+        end_season = ns.start_season
+    else:
+        end_season = date.today().year
+
+    if ns.start_season is None and ns.end_season is None:
+        print(
+            f"FanGraphs ETL: no --start-season/--end-season; using {start_season}–{end_season} "
+            "(pass a smaller range for faster runs).",
+            file=sys.stderr,
+        )
     if sum(1 for x in (ns.batting_only, ns.pitching_only, ns.fielding_only) if x) > 1:
         parser.error("use at most one of --batting-only / --pitching-only / --fielding-only")
     load_fielding = ns.fielding_only
@@ -575,7 +648,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         run_fg_etl(
             dsn or "",
-            start_season=ns.start_season,
+            start_season=start_season,
             end_season=end_season,
             league=ns.league,
             qual=None if ns.fangraphs_qualified_fetch else ns.qual,

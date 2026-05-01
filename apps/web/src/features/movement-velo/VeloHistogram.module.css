@@ -1,0 +1,43 @@
+.sectionPad {
+  padding-block: var(--mui-spacing-1, 8px);
+}
+
+.title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.root {
+  width: 100%;
+  max-width: 520px;
+}
+
+.rootEmbedded {
+  padding-block: 0;
+}
+
+.rootStandalone {
+  padding-block: var(--mui-spacing-1, 8px);
+}
+
+.titleStandalone {
+  font-weight: 600;
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.titleEmbedded {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.subLead {
+  display: block;
+}
+
+.subLeadStandalone {
+  margin-bottom: 4px;
+}
+
+.subLeadEmbedded {
+  margin-bottom: 2px;
+}

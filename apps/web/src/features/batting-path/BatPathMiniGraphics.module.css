@@ -1,0 +1,155 @@
+.miniCard {
+  background-color: transparent;
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  padding: 6px 8px 4px;
+  min-height: 168px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.miniCardTitle {
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.miniCardContent {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 118px;
+}
+
+.miniCardFooter {
+  display: block;
+  margin-top: 2px;
+}
+
+.empPrimary {
+  color: var(--mui-palette-primary-main, #00838f);
+  font-weight: 700;
+}
+
+.empWarning {
+  color: var(--mui-palette-warning-main, #ed6c02);
+  font-weight: 700;
+}
+
+.gaugeOverlayTitle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  text-align: center;
+  color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.gaugeSvgWrap {
+  position: relative;
+  width: 140px;
+  height: 102px;
+}
+
+.columnStretch {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-self: stretch;
+}
+
+.measureHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.attackPlateBox {
+  width: 100%;
+  max-width: 168px;
+  height: 132px;
+  position: relative;
+  margin-inline: auto;
+}
+
+.scaleRow {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-self: stretch;
+}
+
+.scaleFooter {
+  width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  margin-top: 0;
+}
+
+.scaleCaption {
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.swingTiltRail {
+  flex: 1;
+  min-width: 0;
+}
+
+.swingTiltCaption {
+  font-size: 0.55rem;
+  line-height: 1.1;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+.pullOppoRow {
+  display: flex;
+  justify-content: center;
+  column-gap: 10px;
+  padding-inline: 2px;
+  width: 100%;
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+.attackDegHeadline {
+  text-align: center;
+  color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+  font-weight: 700;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+  line-height: 1.05;
+  padding-block: 0;
+  margin-top: 0;
+}
+
+.swingTiltChartRow {
+  width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  margin-top: 0;
+  align-items: stretch;
+}
+
+.swingTiltInnerRow {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.swingTiltLabelCol {
+  width: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-block: 4px;
+  flex-shrink: 0;
+}

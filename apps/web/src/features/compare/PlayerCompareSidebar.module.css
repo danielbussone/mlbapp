@@ -1,0 +1,52 @@
+.paper {
+  /* theme.spacing(1.5) */
+  padding: 12px;
+  position: relative;
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.headerRow {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.title {
+  font-weight: 600;
+}
+
+.errorText {
+  display: block;
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.metaText {
+  display: block;
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.tableSpaced {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.metricKey {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+}
+
+.sectionLabel {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.yearHeader {
+  font-weight: 600;
+}
+
+.statcastBlock {
+  margin-top: 12px;
+}
+
+.footerNote {
+  display: block;
+  margin-top: var(--mui-spacing-1, 8px);
+}

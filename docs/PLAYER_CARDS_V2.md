@@ -45,7 +45,7 @@ Uses FanGraphs JSON leaders API with `stats=fld` (`mlbapp_etl/fg_api.py`). Run f
 | Table | `savant_fielding_oaa_cell` — PK `(player_mlbam, game_year, cell_id)`; columns `oaa`, `attempts`, `ingested_at` ([V14 migration](../db/sql/V14__statcast_league_movement_fg_fielding_oaa.sql)). |
 | ETL | [`fielding_oaa_cell.py`](../etl/mlbapp_etl/fielding_oaa_cell.py) — **`of_dir_*`** (six slices) and **`if_dir_*` / `if_split_*`** (infield ingest). |
 | API | `GET /api/players/:id/fielding-oaa?game_year=` — resolves `dim_player.key_mlbam`, returns `{ cells: [...] }` via `statcastFieldingOaaCells` ([`statcastFielding.ts`](../apps/api/src/repos/statcastFielding.ts)). |
-| UI | [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/OaaHeatmapPlaceholder.tsx) — **`of_dir_*`:** directional pie on the outfield SVG; anchor **LF / CF / RF** from FanGraphs innings. **`if_dir_*`:** infield diagram (`OaaIfDirectionalField`). If both OF and IF cells exist for a player-season, the UI picks **outfield vs infield** from **which side has more FanGraphs innings** (LF–RF vs 1B–SS), with ties broken toward OF unless only one side has a primary split. Other `cell_id` schemes still use the flex grid. |
+| UI | [`OaaHeatmapPlaceholder.tsx`](../apps/web/src/features/fielding-oaa/OaaHeatmapPlaceholder.tsx) — **`of_dir_*`:** directional pie on the outfield SVG; anchor **LF / CF / RF** from FanGraphs innings. **`if_dir_*`:** infield diagram (`OaaIfDirectionalField`). If both OF and IF cells exist for a player-season, the UI picks **outfield vs infield** from **which side has more FanGraphs innings** (LF–RF vs 1B–SS), with ties broken toward OF unless only one side has a primary split. Other `cell_id` schemes still use the flex grid. |
 
 ### OAA defense field heat map — remaining work
 
@@ -53,9 +53,9 @@ This is the **spec checklist** for a spray-chart-style **field overlay** (not th
 
 1. **Approved data source** — **Outfield** and **infield** directional grids use **`pnpm etl:fielding-oaa`** and **`pnpm etl:fielding-oaa-if`** ([STATCAST_REQUIREMENTS.md](./STATCAST_REQUIREMENTS.md) §11–11b). Further grids need additional feeds and `cell_id` namespaces.
 
-2. **Cell vocabulary contract** — Document a stable mapping **`cell_id` → defensive responsibility zone** (Savant’s grid partition for infield vs outfield, and any position-specific schemes). Without it, cells cannot be placed on an SVG. **Proposed doc artifact:** a small table or JSON in-repo, e.g. `docs/fielding-oaa-cell-map.md` or a module under `apps/web/src/fielding/`, versioned when Savant changes the grid.
+2. **Cell vocabulary contract** — Document a stable mapping **`cell_id` → defensive responsibility zone** (Savant’s grid partition for infield vs outfield, and any position-specific schemes). Without it, cells cannot be placed on an SVG. **Proposed doc artifact:** a small table or JSON in-repo, e.g. `docs/fielding-oaa-cell-map.md` or a module under `apps/web/src/features/fielding-oaa/`, versioned when Savant changes the grid.
 
-3. **Geometry layer** — Reuse **SVG field** patterns from [`SprayChart.tsx`](../apps/web/src/SprayChart.tsx) (100×100 viewBox, Savant `hc_x` / `hc_y` semantics, [csv-docs](https://baseballsavant.mlb.com/csv-docs)) or follow **official Savant diagram** specs. Decide how **primary position** (e.g. SS vs CF) selects **infield-skew vs outfield-skew** grid layouts if the export is not uniform.
+3. **Geometry layer** — Reuse **SVG field** patterns from [`SprayChart.tsx`](../apps/web/src/features/spray-chart/SprayChart.tsx) (100×100 viewBox, Savant `hc_x` / `hc_y` semantics, [csv-docs](https://baseballsavant.mlb.com/csv-docs)) or follow **official Savant diagram** specs. Decide how **primary position** (e.g. SS vs CF) selects **infield-skew vs outfield-skew** grid layouts if the export is not uniform.
 
 4. **Color scale** — **Diverging:** red = **positive** OAA, blue = **negative** (matches the current placeholder). **Accessibility:** add a **color-blind-safe** palette option (e.g. blue–orange or a signed ramp) and do not rely on hue alone; keep **legend** + tooltips (placeholder includes a short legend when data exists).
 

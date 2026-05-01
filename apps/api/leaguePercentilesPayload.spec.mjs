@@ -3,14 +3,14 @@ import { describe, it } from 'node:test';
 import { buildPercentileSlot } from './dist/repos/leaguePercentilesPayload.js';
 
 describe('buildPercentileSlot', () => {
-  it('returns null p when not qualified', () => {
+  it('keeps p when unqualified but value present (provisional display)', () => {
     const s = buildPercentileSlot({
       percentile: 91,
       cohortN: 400,
       qualified: false,
       value: 97.4,
     });
-    assert.equal(s.p, null);
+    assert.equal(s.p, 91);
     assert.equal(s.qualified, false);
     assert.equal(s.value, 97.4);
     assert.equal(s.n, 400);

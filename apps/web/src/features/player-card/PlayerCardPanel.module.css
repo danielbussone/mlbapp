@@ -1,0 +1,200 @@
+/* Breakpoints match MUI defaults (md 900px, lg 1200px). */
+
+/* FanGraphs-style table shell: @/styles/fgTableShell.module.css */
+
+/* —— Statcast accordion shells —— */
+.statcastAccordion {
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  background-color: var(--mui-palette-background-paper, #fff);
+}
+
+.statcastAccordion::before {
+  display: none;
+}
+
+.accordionDetailsFlush {
+  padding-top: 0;
+}
+
+.subtitleStrong {
+  font-weight: 600;
+}
+
+/* —— Toolbar & alerts —— */
+.toolbarStack {
+  margin-bottom: var(--mui-spacing-2, 16px);
+}
+
+.seasonSelect {
+  min-width: 110px;
+}
+
+.alertStackMargin {
+  margin-bottom: var(--mui-spacing-2, 16px);
+}
+
+.alertDense {
+  /* theme.spacing(0.5) */
+  padding-block: 4px;
+}
+
+/* —— Main card grid —— */
+.cardPaper {
+  overflow: hidden;
+}
+
+.cardGrid {
+  display: grid;
+  gap: 0;
+}
+
+.cardGridExpanded {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .cardGridExpanded {
+    grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+  }
+}
+
+.cardGridCollapsed {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .cardGridCollapsed {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+}
+
+.gridCellLeft {
+  min-width: 0;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+@media (min-width: 900px) {
+  .cardGridExpanded > .gridCellLeft {
+    border-right-width: 1px;
+    border-right-style: solid;
+  }
+}
+
+.gridPadSidebar {
+  /* theme.spacing(1.5) */
+  padding: 12px;
+}
+
+.gridPadPage {
+  padding: var(--mui-spacing-2, 16px);
+}
+
+.playerName {
+  font-weight: 600;
+}
+
+.bioStack {
+  margin-top: var(--mui-spacing-1, 8px);
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+.helpCursor {
+  cursor: help;
+}
+
+.chipRowPad {
+  padding-top: 2px;
+}
+
+.sectionSubtitle {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sectionSubtitleGrouped {
+  font-weight: 600;
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
+/* Collapsed Statcast rail */
+.statcastRailCollapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--mui-spacing-1, 8px) 2px;
+  background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+  border-left-width: 1px;
+  border-left-style: solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.railChevron {
+  margin-block: auto;
+}
+
+.gridCellRight {
+  min-width: 0;
+  background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+}
+
+.statcastHeaderRow {
+  margin-bottom: var(--mui-spacing-1, 8px);
+}
+
+/* Pitch mix fallback table */
+.mixTable {
+  width: 100%;
+  max-width: 420px;
+}
+
+.pitchTypeSwatch {
+  min-width: 22px;
+  width: 22px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.stackMinW0 {
+  min-width: 0;
+}
+
+.pitchMetaCaption {
+  line-height: 1.1;
+}
+
+.trendLinkBtn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.batTrendLinkBtn {
+  align-self: flex-start;
+}
+
+.batTrendLinkBtnSpaced {
+  margin-top: 4px;
+}
+
+/* Page vs sidebar chrome */
+.sidebarShell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebarScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.pageContainer {
+  padding-block: var(--mui-spacing-3, 24px);
+}

@@ -14,21 +14,34 @@ function sanitizeFgPositionDisplay(raw: string | null | undefined): string | nul
  * Pitcher header chip: SP / RP / SP·RP from FanGraphs consolidated games / games started.
  */
 function pitcherUsageRoleLabel(gamesStarted: unknown, games: unknown): string | null {
-  const g = typeof games === 'number' ? games : Number(games);
-  const gs = typeof gamesStarted === 'number' ? gamesStarted : Number(gamesStarted);
+  const k = pitcherJawsCohortRoleKey(gamesStarted, games);
+  if (k === 'SP_RP') return 'SP/RP';
+  return k;
+}
+
+/**
+ * SP / RP / SP_RP bucket matching ``mv_fg_pitcher_jaws_cohort`` / primary-role matviews (underscore).
+ * Uses **career** games and games started only (no peak-WAR requirement).
+ */
+export function pitcherJawsCohortRoleKey(
+  careerGamesStarted: unknown,
+  careerGames: unknown
+): 'SP' | 'RP' | 'SP_RP' | null {
+  const g = typeof careerGames === 'number' ? careerGames : Number(careerGames);
+  const gsvRaw = typeof careerGamesStarted === 'number' ? careerGamesStarted : Number(careerGamesStarted);
   if (!Number.isFinite(g) || g <= 0) return null;
-  const gsv = Number.isFinite(gs) && gs >= 0 ? gs : 0;
+  const gsv = Number.isFinite(gsvRaw) && gsvRaw >= 0 ? gsvRaw : 0;
   const r = gsv / g;
   if (g >= 8 && (gsv >= 10 || r >= 0.55)) return 'SP';
   if (g >= 15 && (gsv <= 2 || r <= 0.1)) return 'RP';
   if (r >= 0.42 && gsv >= 3) return 'SP';
   if (r <= 0.2 && g >= 10) return 'RP';
-  if (g >= 12) return 'SP/RP';
+  if (g >= 12) return 'SP_RP';
   return null;
 }
 
 /** Match FG rows to dim_player by surrogate id or fangraphs external id. */
-function playerFgPredicate(alias: string): string {
+export function playerFgPredicate(alias: string): string {
   return `(
     ${alias}.player_id = $1
     OR EXISTS (
@@ -211,8 +224,8 @@ LIMIT 1
 `;
 
 /**
- * JAWS-style peak: average fWAR of the best seven MLB seasons (fewer seasons if career shorter).
- * Uses FanGraphs consolidated season WAR — not Baseball-Reference rWAR.
+ * JAWS-style peak: **sum** of fWAR in the best seven MLB seasons (fewer rows if the career has fewer than seven WAR seasons).
+ * Matches the usual BRef “7-year peak” construction; uses FanGraphs consolidated season WAR — not rWAR.
  */
 const FG_BATTING_PEAK_WAR_SQL = `
 WITH ${fgResolvedIdFgCte('fg_batting_season_mlb_consolidated').trim()},
@@ -224,7 +237,7 @@ top_seasons AS (
   ORDER BY s.war DESC NULLS LAST
   LIMIT 7
 )
-SELECT AVG(war)::double precision AS peak_war_fwar
+SELECT SUM(war)::double precision AS peak_war_fwar
 FROM top_seasons
 `;
 
@@ -238,7 +251,7 @@ top_seasons AS (
   ORDER BY s.war DESC NULLS LAST
   LIMIT 7
 )
-SELECT AVG(war)::double precision AS peak_war_fwar
+SELECT SUM(war)::double precision AS peak_war_fwar
 FROM top_seasons
 `;
 
@@ -257,7 +270,7 @@ export type FgBattingCardPayload = {
   has_row_for_season: boolean | null;
   /** JAWS-style metric using FanGraphs WAR; differs from Baseball-Reference JAWS (rWAR). */
   jaws_fwar: number | null;
-  /** Average fWAR of best seven seasons (same basis as `jaws_fwar`). */
+  /** Sum of fWAR in the best seven seasons (same basis as `jaws_fwar`). */
   peak_war_fwar: number | null;
 };
 

@@ -1,0 +1,37 @@
+.wrap560 {
+  width: 100%;
+  max-width: 560px;
+}
+
+.caption {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.svgField {
+  width: 100%;
+  margin-inline: auto;
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  overflow: hidden;
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  background-color: transparent;
+}
+
+.svgFieldOf {
+  max-height: 560px;
+}
+
+.svgFieldIf {
+  max-height: 580px;
+}
+
+.footerNote {
+  display: block;
+  margin-top: 6px;
+}
+
+.captionRow {
+  margin-top: 6px;
+  flex-wrap: wrap;
+}

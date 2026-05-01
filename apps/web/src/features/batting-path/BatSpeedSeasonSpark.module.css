@@ -1,0 +1,12 @@
+.wrap {
+  margin-top: var(--mui-spacing-1, 8px);
+}
+
+.title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.footer {
+  display: block;
+}
