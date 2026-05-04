@@ -5,7 +5,7 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useEffect, useMemo, useState } from 'react';
 
-import type { LeaguePercentilesResponse } from '@/features/league-percentiles/leaguePercentilesTypes.js';
+import { useLeaguePercentilesQuery } from '@/api/playerQueries.js';
 import { ifMiniPieAnchorFromFg } from './infieldFieldGeometry.js';
 import { OaaDirectionalField } from './OaaDirectionalField.js';
 import { OaaIfDirectionalField } from './OaaIfDirectionalField.js';
@@ -37,9 +37,17 @@ export function OaaHeatmapPlaceholder({
   fieldingRowsReady: boolean;
 }) {
   const [cells, setCells] = useState<Record<string, unknown>[]>([]);
-  const [percentilePayload, setPercentilePayload] = useState<LeaguePercentilesResponse | null>(null);
   const [oaaCellsSettled, setOaaCellsSettled] = useState(false);
-  const [percentilesSettled, setPercentilesSettled] = useState(false);
+  const {
+    data: percentilesRaw,
+    isFetched: percentilesFetched,
+    isError: percentilesQueryError,
+  } = useLeaguePercentilesQuery({ playerId, gameYear, role: 'fielding' });
+  const percentilePayload =
+    percentilesFetched && !percentilesQueryError && percentilesRaw?.percentiles_available
+      ? percentilesRaw
+      : null;
+  const percentilesSettled = percentilesFetched;
 
   function finiteNum(v: unknown): number | null {
     if (v == null || v === '') return null;
@@ -60,31 +68,6 @@ export function OaaHeatmapPlaceholder({
         if (!cancelled) setCells([]);
       } finally {
         if (!cancelled) setOaaCellsSettled(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, gameYear]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setPercentilesSettled(false);
-    const qs = new URLSearchParams({
-      game_year: String(gameYear),
-      role: 'fielding',
-    });
-    void (async () => {
-      try {
-        const r = await fetch(`/api/players/${playerId}/league-percentiles?${qs.toString()}`);
-        const j = (await r.json()) as LeaguePercentilesResponse & { error?: string };
-        if (cancelled) return;
-        if (r.ok && j.percentiles_available) setPercentilePayload(j);
-        else setPercentilePayload(null);
-      } catch {
-        if (!cancelled) setPercentilePayload(null);
-      } finally {
-        if (!cancelled) setPercentilesSettled(true);
       }
     })();
     return () => {

@@ -10,7 +10,8 @@ import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { alpha } from '@mui/material/styles';
-import React, { forwardRef, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import React, { forwardRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useLeaguePercentilesQuery } from '@/api/playerQueries.js';
 import type { LeaguePercentilesResponse, PercentileDirection, PercentileSlot } from './leaguePercentilesTypes.js';
 import {
   goodnessDisplayPercentile,
@@ -657,9 +658,13 @@ function wrapLeaguePercentilesRail(inner: ReactNode) {
 }
 
 export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCode: _positionCode, pitchTypes }: Props) {
-  const [data, setData] = useState<LeaguePercentilesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  const role = apiRole(cardRole);
+  const {
+    data,
+    error,
+    isLoading,
+    isError,
+  } = useLeaguePercentilesQuery({ playerId, gameYear: season, role });
   /** Pitch-type breakdown rows: default collapsed. */
   const [pitchTypeOpen, setPitchTypeOpen] = useState<Record<string, boolean>>({});
   /** Fielding per-position rows: default collapsed. */
@@ -677,48 +682,13 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
   const [pitchingExpectedStatsOpen, setPitchingExpectedStatsOpen] = useState(false);
   const [catchingValueOpen, setCatchingValueOpen] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    const role = apiRole(cardRole);
-    const qs = new URLSearchParams({
-      game_year: String(season),
-      role,
-    });
-    void (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const r = await fetch(`/api/players/${playerId}/league-percentiles?${qs.toString()}`);
-        const j = (await r.json()) as LeaguePercentilesResponse & { error?: string };
-        if (cancelled) return;
-        if (!r.ok) {
-          setData(null);
-          setErr(String(j.error ?? r.statusText));
-          setLoading(false);
-          return;
-        }
-        setData(j);
-      } catch (e) {
-        if (!cancelled) {
-          setData(null);
-          setErr(e instanceof Error ? e.message : 'Request failed');
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, season, cardRole]);
-
-  if (loading) {
+  if (isLoading) {
     return null;
   }
-  if (err) {
+  if (isError) {
     return (
       <Alert severity="warning" className={styles.alertDense}>
-        {err}
+        {error instanceof Error ? error.message : 'Request failed'}
       </Alert>
     );
   }

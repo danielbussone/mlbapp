@@ -442,6 +442,7 @@ function silhouetteRasterBatMaskRect(
   padU = 0.1,
   padV = 0.1
 ): { x: number; y: number; w: number; h: number } {
+  void batterStand;
   const { silW, silH, silX, silY } = sil;
   const uAdjPx = -5;
   /** Local image coords: `<image>` uses flip `translate(silX+silW,silY) scale(-1,1)`. */

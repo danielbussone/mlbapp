@@ -1,7 +1,7 @@
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import { useEffect, useState } from 'react';
+import { useJawsExpandedQuery } from '@/api/playerQueries.js';
 
 export type JawsExpandedApiRole = 'batting' | 'pitching';
 
@@ -55,39 +55,13 @@ export function JawsExpandedBlock({
   /** FG card JAWS while the expanded API request is in flight. */
   summaryJaws: number | null;
 }) {
-  const [data, setData] = useState<JawsExpandedWirePayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setErr(null);
-    setData(null);
-    void (async () => {
-      try {
-        const r = await fetch(`/api/players/${playerId}/jaws-expanded?role=${fgRole}`);
-        const j = (await r.json()) as JawsExpandedWirePayload & { error?: string };
-        if (cancelled) return;
-        if (!r.ok) {
-          setErr(typeof j.error === 'string' ? j.error : 'Failed to load JAWS');
-          setData(null);
-          return;
-        }
-        setData(j);
-      } catch {
-        if (!cancelled) {
-          setErr('Failed to load JAWS');
-          setData(null);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, fgRole]);
+  const {
+    data,
+    error,
+    isLoading: loading,
+    isError,
+  } = useJawsExpandedQuery({ playerId, fgRole });
+  const err = isError ? (error instanceof Error ? error.message : 'Failed to load JAWS') : null;
 
   const j0 =
     summaryJaws != null && Number.isFinite(summaryJaws) ? summaryJaws.toFixed(1) : null;

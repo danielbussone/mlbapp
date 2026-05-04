@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.62.8",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
     "@mlbapp/shared": "workspace:*",
@@ -20,6 +21,7 @@
     "react-router-dom": "^7.6.1"
   },
   "devDependencies": {
+    "@tanstack/react-query-devtools": "^5.62.8",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",

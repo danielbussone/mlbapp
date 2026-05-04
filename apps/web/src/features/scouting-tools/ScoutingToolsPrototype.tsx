@@ -14,7 +14,8 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useLeaguePercentilesQuery } from '@/api/playerQueries.js';
 import type { LeaguePercentilesResponse, PercentileSlot } from '@/features/league-percentiles/leaguePercentilesTypes.js';
 import type { LeaguePercentilesCardRole } from '@/features/league-percentiles/LeaguePercentilesPanel.js';
 import {
@@ -37,17 +38,6 @@ function apiRole(cardRole: LeaguePercentilesCardRole): 'batter' | 'pitcher' | 'f
   if (cardRole === 'batting') return 'batter';
   if (cardRole === 'pitching') return 'pitcher';
   return 'fielding';
-}
-
-async function fetchPercentiles(
-  playerId: number,
-  season: number,
-  role: 'batter' | 'pitcher' | 'fielding'
-): Promise<{ ok: boolean; json: LeaguePercentilesResponse & { error?: string } }> {
-  const qs = new URLSearchParams({ game_year: String(season), role });
-  const r = await fetch(`/api/players/${playerId}/league-percentiles?${qs.toString()}`);
-  const json = (await r.json()) as LeaguePercentilesResponse & { error?: string };
-  return { ok: r.ok, json };
 }
 
 function formatGrade(v: number | null): string {
@@ -360,39 +350,13 @@ function Section({
 }
 
 export function ScoutingToolsPrototype({ playerId, season, cardRole }: Props) {
-  const [primary, setPrimary] = useState<LeaguePercentilesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const r1 = await fetchPercentiles(playerId, season, apiRole(cardRole));
-        if (cancelled) return;
-        if (!r1.ok || r1.json.error) {
-          setPrimary(null);
-          setErr(String(r1.json.error ?? 'League percentiles request failed'));
-          setLoading(false);
-          return;
-        }
-        setPrimary(r1.json);
-      } catch (e) {
-        if (!cancelled) {
-          setPrimary(null);
-          setErr(e instanceof Error ? e.message : 'Request failed');
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, season, cardRole]);
+  const {
+    data: primary,
+    error,
+    isLoading: loading,
+    isError,
+  } = useLeaguePercentilesQuery({ playerId, gameYear: season, role: apiRole(cardRole) });
+  const err = isError ? (error instanceof Error ? error.message : 'Request failed') : null;
 
   if (loading) {
     return (
@@ -403,12 +367,16 @@ export function ScoutingToolsPrototype({ playerId, season, cardRole }: Props) {
     );
   }
 
-  if (err) {
+  if (err != null) {
     return (
       <Alert severity="warning" className={styles.alertDense}>
         {err}
       </Alert>
     );
+  }
+
+  if (!primary) {
+    return null;
   }
 
   return (
