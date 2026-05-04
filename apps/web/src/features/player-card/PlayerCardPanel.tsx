@@ -1,10 +1,6 @@
 import ChevronLeft from '@mui/icons-material/ChevronLeft';
 import ChevronRight from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
-import ExpandMore from '@mui/icons-material/ExpandMore';
-import Accordion from '@mui/material/Accordion';
-import AccordionDetails from '@mui/material/AccordionDetails';
-import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -31,6 +27,7 @@ import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { RailCollapsibleSection } from '@/components/rail/RailCollapsibleSection.js';
 import { Link } from 'react-router-dom';
 import {
   BATTING_CARD_HEADERS,
@@ -426,19 +423,6 @@ function BattingCardTable({
         </TableBody>
       </Table>
     </TableContainer>
-  );
-}
-
-function StatcastCollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Accordion defaultExpanded disableGutters elevation={0} className={styles.statcastAccordion}>
-      <AccordionSummary expandIcon={<ExpandMore fontSize="small" />}>
-        <Typography variant="subtitle2" className={styles.subtitleStrong}>
-          {title}
-        </Typography>
-      </AccordionSummary>
-      <AccordionDetails className={styles.accordionDetailsFlush}>{children}</AccordionDetails>
-    </Accordion>
   );
 }
 
@@ -1048,14 +1032,14 @@ export function PlayerCardPanel({
                 </Stack>
                 {role === 'fielding' ? (
                   <Stack spacing={1}>
-                    <StatcastCollapsibleSection title="OAA field grid">
+                    <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="OAA field grid">
                       <OaaHeatmapPlaceholder
                         playerId={playerId}
                         gameYear={season}
                         fieldingRows={fieldingHistoryRows}
                         fieldingRowsReady={!fieldingHistoryLoading}
                       />
-                    </StatcastCollapsibleSection>
+                    </RailCollapsibleSection>
                     <LeaguePercentilesPanel playerId={playerId} season={season} cardRole="fielding" />
                   </Stack>
                 ) : fetchingSc ? (
@@ -1084,7 +1068,7 @@ export function PlayerCardPanel({
                     )}
                     {statcast && statcastAvailable && role === 'pitching' && (
                       <Stack spacing={1}>
-                        <StatcastCollapsibleSection title="Pitch mix">
+                        <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Pitch mix">
                           {pitchingMixDisplay.length > 0 &&
                             (statcast.velo_dist != null && statcast.velo_dist.length > 0 ? (
                               <PitchMixVeloTable
@@ -1152,9 +1136,9 @@ export function PlayerCardPanel({
                               Pitch usage & process rates →
                             </Button>
                           )}
-                        </StatcastCollapsibleSection>
+                        </RailCollapsibleSection>
                         {statcast.sample != null && statcast.sample.length > 0 && (
-                          <StatcastCollapsibleSection title="Pitch movement">
+                          <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Pitch movement">
                             <MovementMiniPlot
                               rows={
                                 role === 'pitching'
@@ -1164,20 +1148,20 @@ export function PlayerCardPanel({
                               leagueMovement={leagueMovementForPlot ?? undefined}
                               armAngle={armOverlay ?? undefined}
                             />
-                          </StatcastCollapsibleSection>
+                          </RailCollapsibleSection>
                         )}
                       </Stack>
                     )}
                     {statcast && statcastAvailable && role === 'batting' && (
                       <Stack spacing={1}>
-                        <StatcastCollapsibleSection title="Batted ball">
+                        <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Batted ball">
                           <Stack direction="row" spacing={0.5} flexWrap="wrap">
                             <Chip size="small" label={`BBE ${String(statcast.batted_ball?.bbe ?? '—')}`} />
                             <Chip size="small" label={`EV ${String(statcast.batted_ball?.avg_ev ?? '—')}`} />
                             <Chip size="small" label={`LA ${String(statcast.batted_ball?.avg_la ?? '—')}`} />
                           </Stack>
-                        </StatcastCollapsibleSection>
-                        <StatcastCollapsibleSection title="Bat tracking">
+                        </RailCollapsibleSection>
+                        <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Bat tracking">
                           {statcast.bat_path != null && typeof statcast.bat_path === 'object' && (
                             <BatPathSummary batPath={statcast.bat_path as BatPathApiRow} />
                           )}
@@ -1192,11 +1176,11 @@ export function PlayerCardPanel({
                           >
                             Career bat-tracking trends →
                           </Button>
-                        </StatcastCollapsibleSection>
+                        </RailCollapsibleSection>
                         {statcast.sample != null && statcast.sample.length > 0 && (
-                          <StatcastCollapsibleSection title="Spray chart">
+                          <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Spray chart">
                             <SprayChart rows={statcast.sample} gameYear={season} />
-                          </StatcastCollapsibleSection>
+                          </RailCollapsibleSection>
                         )}
                       </Stack>
                     )}

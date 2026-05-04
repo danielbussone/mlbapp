@@ -1,7 +1,3 @@
-import ExpandMore from '@mui/icons-material/ExpandMore';
-import Accordion from '@mui/material/Accordion';
-import AccordionDetails from '@mui/material/AccordionDetails';
-import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
@@ -12,12 +8,14 @@ import Typography from '@mui/material/Typography';
 import { alpha } from '@mui/material/styles';
 import React, { forwardRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useLeaguePercentilesQuery } from '@/api/playerQueries.js';
+import { RailCollapsibleSection } from '@/components/rail/RailCollapsibleSection.js';
 import type { LeaguePercentilesResponse, PercentileDirection, PercentileSlot } from './leaguePercentilesTypes.js';
 import {
   goodnessDisplayPercentile,
   thumbColorForGoodnessPercentile,
 } from './percentileGoodnessColor.js';
 import { pitchTypeName } from '@/features/pitch-mix/pitchTypeLabels.js';
+import { mergePercentileSlotsForRole } from './mergePercentileSlotsForRole.js';
 import { PercentileCollapsibleSection } from './PercentileCollapsibleSection.js';
 import styles from './LeaguePercentilesPanel.module.css';
 
@@ -605,7 +603,7 @@ function percentilesPanelHasContent(data: LeaguePercentilesResponse, pitchTypes:
     return hasValueSection || hasExpectedSection || hasBatPath || hasMain || hasRun;
   }
   if (data.role === 'pitcher') {
-    const pit = data.savant_pitching ?? data.season?.percentiles ?? {};
+    const pit = mergePercentileSlotsForRole(data);
     const byPt = data.by_pitch_type ?? {};
     const types = (pitchTypes ?? []).filter((t) => byPt[t]);
     const hasWar = SAVANT_PITCHING_WAR_ORDER.some((id) => fieldingSlotHasValue(pit[id]));
@@ -646,14 +644,9 @@ function percentilesPanelHasContent(data: LeaguePercentilesResponse, pitchTypes:
 
 function wrapLeaguePercentilesRail(inner: ReactNode) {
   return (
-    <Accordion defaultExpanded disableGutters elevation={0} className={styles.statcastAccordion}>
-      <AccordionSummary expandIcon={<ExpandMore fontSize="small" />}>
-        <Typography variant="subtitle2" className={styles.railAccordionTitle}>
-          League percentiles
-        </Typography>
-      </AccordionSummary>
-      <AccordionDetails className={styles.accordionDetailsFlush}>{inner}</AccordionDetails>
-    </Accordion>
+    <RailCollapsibleSection title="League percentiles" titleTypographyClassName={styles.railAccordionTitle}>
+      {inner}
+    </RailCollapsibleSection>
   );
 }
 
@@ -769,7 +762,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
   if (data.role === 'pitcher') {
     const byPt = data.by_pitch_type ?? {};
     const types = (pitchTypes ?? []).filter((t) => byPt[t]);
-    const pit = data.savant_pitching ?? data.season?.percentiles ?? {};
+    const pit = mergePercentileSlotsForRole(data);
     const pitchingWarIds = SAVANT_PITCHING_WAR_ORDER.filter((id) => fieldingSlotHasValue(pit[id]));
     const hasPitchingWar = pitchingWarIds.length > 0;
     const pitchingValueIds = SAVANT_PITCHING_VALUE_ORDER.filter((id) => fieldingSlotHasValue(pit[id]));

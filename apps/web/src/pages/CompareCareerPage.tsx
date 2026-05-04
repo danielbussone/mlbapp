@@ -9,8 +9,9 @@ import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useCompareFgCareerQuery } from '@/api/compareQueries.js';
 
 type PlayerRow = { player_id: number; name_first?: string; name_last?: string; key_mlbam?: number | null };
 
@@ -46,8 +47,11 @@ const BATTING_METRICS: { key: string; label: string; higherWins: boolean }[] = [
 export function CompareCareerPage() {
   const [sp] = useSearchParams();
   const idsParam = sp.get('player_ids') ?? '';
-  const [err, setErr] = useState<string | null>(null);
-  const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
+  const seasonRaw = sp.get('season');
+  const season =
+    seasonRaw != null && Number.isFinite(Number.parseInt(seasonRaw, 10)) && Number.parseInt(seasonRaw, 10) > 0
+      ? Number.parseInt(seasonRaw, 10)
+      : null;
 
   const ids = useMemo(
     () =>
@@ -55,42 +59,32 @@ export function CompareCareerPage() {
         .split(',')
         .map((s) => Number.parseInt(s.trim(), 10))
         .filter((n) => Number.isInteger(n) && n > 0),
-    [idsParam]
+    [idsParam],
   );
 
-  useEffect(() => {
-    if (ids.length < 2) {
-      setErr('Pass at least two player_ids (comma-separated), e.g. ?player_ids=1,2');
-      setPayload(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const q = new URLSearchParams({ player_ids: ids.join(',') });
-        const r = await fetch(`/api/players/compare/fg-career?${q}`);
-        const j = (await r.json()) as Record<string, unknown>;
-        if (cancelled) return;
-        if (!r.ok) {
-          setErr(String(j.error ?? `Request failed (${r.status})`));
-          setPayload(null);
-          return;
-        }
-        setErr(null);
-        setPayload(j);
-      } catch {
-        if (!cancelled) setErr('Network error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const pair = useMemo((): readonly [number, number] | null => {
+    if (ids.length < 2) return null;
+    return [ids[0]!, ids[1]!];
   }, [ids]);
+
+  const { data: payload, isError, error } = useCompareFgCareerQuery({
+    playerIds: pair,
+    season,
+    enabled: pair != null,
+  });
+
+  const err =
+    ids.length < 2
+      ? 'Pass at least two player_ids (comma-separated), e.g. ?player_ids=1,2'
+      : isError
+        ? error instanceof Error
+          ? error.message
+          : 'Request failed'
+        : null;
 
   const players = (payload?.players as PlayerRow[] | undefined) ?? [];
   const careers =
-    (payload?.batting_careers as { player_id: number; career: Record<string, unknown> | null }[] | undefined) ??
-    [];
+    (payload?.batting_careers as { player_id: number; career: Record<string, unknown> | null }[] | undefined) ?? [];
 
   const byId = useMemo(() => {
     const m = new Map<number, Record<string, unknown> | null>();
@@ -147,7 +141,8 @@ export function CompareCareerPage() {
                     {players.map((p) => {
                       const raw = byId.get(p.player_id)?.[key];
                       const v = num(raw);
-                      const wins = v != null && target != null && v === target && vals.filter((x) => x === v).length === 1;
+                      const wins =
+                        v != null && target != null && v === target && vals.filter((x) => x === v).length === 1;
                       const tieHighlight =
                         v != null && target != null && v === target && vals.filter((x) => x === v).length > 1;
                       const highlight = wins || tieHighlight;

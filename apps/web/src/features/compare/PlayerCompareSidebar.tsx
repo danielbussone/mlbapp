@@ -10,9 +10,10 @@ import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
-import { useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
+import { useCompareFgCareerQuery, useCompareStatcastSummaryQuery } from '@/api/compareQueries.js';
 import styles from './PlayerCompareSidebar.module.css';
+
 function fmt(v: unknown): string {
   if (v == null || v === '') return '—';
   const n = typeof v === 'number' ? v : Number(v);
@@ -46,39 +47,31 @@ export function PlayerCompareSidebar({
   compareFgSeason?: number | null;
   onClose: () => void;
 }) {
-  const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const careerQ = useCompareFgCareerQuery({
+    playerIds,
+    season: compareFgSeason,
+    enabled: mode === 'career',
+  });
+  const statQ = useCompareStatcastSummaryQuery({
+    playerIds,
+    role: 'pitcher',
+    gameYear,
+    enabled: mode === 'statcast',
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const q = new URLSearchParams({ player_ids: `${playerIds[0]},${playerIds[1]}` });
-        if (mode === 'career' && compareFgSeason != null && compareFgSeason > 0) {
-          q.set('season', String(compareFgSeason));
-        }
-        const path =
-          mode === 'career'
-            ? `/api/players/compare/fg-career?${q}`
-            : `/api/players/compare/statcast-summary?${q}&role=pitcher&game_year=${gameYear}`;
-        const r = await fetch(path);
-        const j = (await r.json()) as Record<string, unknown>;
-        if (cancelled) return;
-        if (!r.ok) {
-          setErr(String(j.error ?? r.status));
-          setPayload(null);
-          return;
-        }
-        setErr(null);
-        setPayload(j);
-      } catch {
-        if (!cancelled) setErr('Network error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerIds, mode, gameYear, compareFgSeason]);
+  const payload = mode === 'career' ? careerQ.data ?? null : statQ.data ?? null;
+  const err =
+    mode === 'career'
+      ? careerQ.isError
+        ? careerQ.error instanceof Error
+          ? careerQ.error.message
+          : 'Request failed'
+        : null
+      : statQ.isError
+        ? statQ.error instanceof Error
+          ? statQ.error.message
+          : 'Request failed'
+        : null;
 
   const players = (payload?.players as Record<string, unknown>[] | undefined) ?? [];
   const fgSeasonYear = (payload?.meta as { fg_season_year?: number } | undefined)?.fg_season_year;
@@ -200,7 +193,7 @@ export function PlayerCompareSidebar({
                     <TableCell key={c.player_id} align="right">
                       {fmt(c.career?.[k])}
                     </TableCell>
-                  )
+                  ),
                 )}
               </TableRow>
             ))}

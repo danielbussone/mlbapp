@@ -1,15 +1,13 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import {
+  parseStatcastTimeseriesNumber as num,
+  useStatcastTimeseriesQuery,
+} from '@/api/statcastTimeseriesQueries.js';
 import styles from './BatSpeedSeasonSpark.module.css';
 
 type Row = { game_year: number; player_avg_bat_speed?: unknown; league_avg_bat_speed?: unknown };
-
-function num(v: unknown): number | null {
-  if (v == null || v === '') return null;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 /** Fetches yearly bat-path summary and draws mph sparkline + league reference + y-axis ticks. */
 export function BatSpeedSeasonSpark({
@@ -26,39 +24,15 @@ export function BatSpeedSeasonSpark({
   /** Taller chart with left mph ticks (default true). */
   showLeagueAxis?: boolean;
 }) {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const lo = Math.min(fromYear, season);
-    const hi = Math.max(fromYear, season);
-    void (async () => {
-      try {
-        const q = new URLSearchParams({
-          role: 'batter',
-          metric: 'bat_path',
-          from: String(lo),
-          to: String(hi),
-        });
-        const r = await fetch(`/api/players/${playerId}/statcast-timeseries?${q}`);
-        const j = (await r.json()) as { rows?: Row[]; error?: string };
-        if (cancelled) return;
-        if (!r.ok) {
-          setErr(j.error ?? String(r.status));
-          setRows([]);
-          return;
-        }
-        setErr(null);
-        setRows(Array.isArray(j.rows) ? j.rows : []);
-      } catch {
-        if (!cancelled) setErr('network');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, season, fromYear]);
+  const { data: rawRows = [], isError, error } = useStatcastTimeseriesQuery({
+    playerId,
+    role: 'batter',
+    metric: 'bat_path',
+    fromYear,
+    toYear: season,
+  });
+  const rows = rawRows as Row[];
+  const err = isError ? (error instanceof Error ? error.message : 'Request failed') : null;
 
   const { pts, leaguePts } = useMemo(() => {
     const out: { x: number; yv: number }[] = [];

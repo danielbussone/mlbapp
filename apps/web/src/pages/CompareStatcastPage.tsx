@@ -10,8 +10,9 @@ import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useCompareStatcastSummaryQuery } from '@/api/compareQueries.js';
 import { MovementMiniPlot, pitchTypeMovementColor } from '@/features/movement-velo/MovementMiniPlot.js';
 import { pitchTypeName } from '@/features/pitch-mix/pitchTypeLabels.js';
 
@@ -20,8 +21,6 @@ export function CompareStatcastPage() {
   const idsParam = sp.get('player_ids') ?? '';
   const role = (sp.get('role') === 'batter' ? 'batter' : 'pitcher') as 'pitcher' | 'batter';
   const year = Number.parseInt(sp.get('game_year') ?? '', 10);
-  const [err, setErr] = useState<string | null>(null);
-  const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
 
   const ids = useMemo(
     () =>
@@ -29,41 +28,29 @@ export function CompareStatcastPage() {
         .split(',')
         .map((s) => Number.parseInt(s.trim(), 10))
         .filter((n) => Number.isInteger(n) && n > 0),
-    [idsParam]
+    [idsParam],
   );
 
-  useEffect(() => {
-    if (ids.length < 2 || !Number.isFinite(year)) {
-      setErr('Need player_ids=1,2 and game_year=2024 (and optional role=pitcher|batter).');
-      setPayload(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const q = new URLSearchParams({
-          player_ids: ids.join(','),
-          role,
-          game_year: String(year),
-        });
-        const r = await fetch(`/api/players/compare/statcast-summary?${q}`);
-        const j = (await r.json()) as Record<string, unknown>;
-        if (cancelled) return;
-        if (!r.ok) {
-          setErr(String(j.error ?? `Request failed (${r.status})`));
-          setPayload(null);
-          return;
-        }
-        setErr(null);
-        setPayload(j);
-      } catch {
-        if (!cancelled) setErr('Network error');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [ids, role, year]);
+  const pair = useMemo((): readonly [number, number] | null => {
+    if (ids.length < 2) return null;
+    return [ids[0]!, ids[1]!];
+  }, [ids]);
+
+  const { data: payload, isError, error } = useCompareStatcastSummaryQuery({
+    playerIds: pair,
+    role,
+    gameYear: year,
+    enabled: pair != null && Number.isFinite(year),
+  });
+
+  const err =
+    ids.length < 2 || !Number.isFinite(year)
+      ? 'Need player_ids=1,2 and game_year=2024 (and optional role=pitcher|batter).'
+      : isError
+        ? error instanceof Error
+          ? error.message
+          : 'Request failed'
+        : null;
 
   const players = (payload?.players as Record<string, unknown>[] | undefined) ?? [];
   const summaries = (payload?.summaries as Record<string, unknown>[] | undefined) ?? [];

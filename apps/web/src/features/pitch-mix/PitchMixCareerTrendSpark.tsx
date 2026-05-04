@@ -1,18 +1,16 @@
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import {
+  parseStatcastTimeseriesNumber as num,
+  useStatcastTimeseriesQuery,
+} from '@/api/statcastTimeseriesQueries.js';
 import { pitchTypeMovementColor } from '@/features/movement-velo/MovementMiniPlot.js';
 import { pitchTypeName } from './pitchTypeLabels.js';
 import styles from './PitchMixCareerTrendSpark.module.css';
 
 type Row = { game_year: number; pitch_type?: unknown; pct?: unknown; pitches?: unknown };
-
-function num(v: unknown): number | null {
-  if (v == null || v === '') return null;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function normPt(s: string): string {
   return s.trim().toUpperCase();
@@ -30,47 +28,15 @@ export function PitchMixCareerTrendSpark({
   season: number;
   fromYear: number;
 }) {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    const lo = Math.min(fromYear, season);
-    const hi = Math.max(fromYear, season);
-    void (async () => {
-      setLoading(true);
-      try {
-        const q = new URLSearchParams({
-          role: 'pitcher',
-          metric: 'pitch_mix',
-          from: String(lo),
-          to: String(hi),
-        });
-        const r = await fetch(`/api/players/${playerId}/statcast-timeseries?${q}`);
-        const j = (await r.json()) as { rows?: Row[]; error?: string };
-        if (cancelled) return;
-        if (!r.ok) {
-          setErr(j.error ?? String(r.status));
-          setRows([]);
-          setLoading(false);
-          return;
-        }
-        setErr(null);
-        setRows(Array.isArray(j.rows) ? j.rows : []);
-      } catch {
-        if (!cancelled) {
-          setErr('network');
-          setRows([]);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, season, fromYear]);
+  const { data: rawRows = [], isPending, isError, error } = useStatcastTimeseriesQuery({
+    playerId,
+    role: 'pitcher',
+    metric: 'pitch_mix',
+    fromYear,
+    toYear: season,
+  });
+  const rows = rawRows as Row[];
+  const err = isError ? (error instanceof Error ? error.message : 'Request failed') : null;
 
   const { years, topTypes, seriesByType } = useMemo(() => {
     const byYearType = new Map<string, number>();
@@ -105,7 +71,7 @@ export function PitchMixCareerTrendSpark({
     return { years, topTypes, seriesByType };
   }, [rows]);
 
-  if (loading) {
+  if (isPending) {
     return (
       <Typography variant="body2" color="text.secondary">
         Loading…

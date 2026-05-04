@@ -1,11 +1,6 @@
-import ExpandLess from '@mui/icons-material/ExpandLess';
-import ExpandMore from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
-import Collapse from '@mui/material/Collapse';
-import IconButton from '@mui/material/IconButton';
-import Stack from '@mui/material/Stack';
-import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
+import { RailCollapsibleSection } from '@/components/rail/RailCollapsibleSection.js';
 import styles from './LeaguePercentilesPanel.module.css';
 
 type PercentileCollapsibleSectionProps = {
@@ -17,7 +12,7 @@ type PercentileCollapsibleSectionProps = {
   children: ReactNode;
 };
 
-/** Header row + MUI Collapse used for grouped percentile rows inside `LeaguePercentilesPanel`. */
+/** Grouped percentile rows inside `LeaguePercentilesPanel` (same rail accordion primitive as Statcast). */
 export function PercentileCollapsibleSection({
   title,
   open,
@@ -28,23 +23,20 @@ export function PercentileCollapsibleSection({
 }: PercentileCollapsibleSectionProps) {
   return (
     <Box className={styles.pitchTypeBlock}>
-      <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-        <IconButton
-          size="small"
-          aria-expanded={open}
-          aria-label={open ? ariaLabelExpanded : ariaLabelCollapsed}
-          onClick={onToggle}
-          className={styles.iconTight}
-        >
-          {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-        </IconButton>
-        <Typography variant="caption" className={styles.pitchTypeLabel}>
-          {title}
-        </Typography>
-      </Stack>
-      <Collapse in={open} timeout="auto" unmountOnExit>
+      <RailCollapsibleSection
+        title={title}
+        summaryVariant="caption"
+        titleTypographyClassName={styles.pitchTypeLabel}
+        expanded={open}
+        onExpandedChange={(next) => {
+          if (next !== open) onToggle();
+        }}
+        accordionSummaryProps={{
+          'aria-label': open ? ariaLabelExpanded : ariaLabelCollapsed,
+        }}
+      >
         <Box className={styles.indent}>{children}</Box>
-      </Collapse>
+      </RailCollapsibleSection>
     </Box>
   );
 }
