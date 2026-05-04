@@ -37,12 +37,10 @@ import {
   type BattingCardLine,
   type FgBattingCardApi,
   battingCardLinesFromCareerViews,
-  FG_CARD_SEASON_ROW_LIMIT,
   fgCardHasAnyRows,
   fgCardSeasonRowIsSelected,
   fgSeasonHasConsolidatedRow,
   formatBattingCardCell,
-  normalizeFgCardPayload,
 } from '@/lib/batterFgTables.js';
 import { CARD_SEASON_YEAR_MAX, getDefaultCardSeasonYear } from '@/lib/cardSeasonYear.js';
 import {
@@ -58,17 +56,7 @@ import {
   PitchingCardTable,
   pitchingCardLinesFromCareerViews,
 } from '@/features/pitch-mix/pitcherFgTables.js';
-import {
-  getCachedFgBatting,
-  getCachedFgPitching,
-  getCachedPlayer,
-  getCachedStatcast,
-  setCachedFgBatting,
-  setCachedFgPitching,
-  setCachedPlayer,
-  setCachedStatcast,
-  type CachedPlayerRow,
-} from '@/features/player-card/playerCardRequestCache.js';
+import { usePlayerCardCoreQueries } from '@/api/playerQueries.js';
 import { BatPathSummary, type BatPathApiRow } from '@/features/batting-path/BatPathSummary.js';
 import { inferPrimaryCardRole } from '@/features/player-card/playerCardPrimaryRole.js';
 import { fetchFgRoleHint } from '@/lib/playerFgRoleHint.js';
@@ -78,11 +66,7 @@ import { PitchMixVeloTable } from '@/features/pitch-mix/PitchMixVeloTable.js';
 import { LeaguePercentilesPanel } from '@/features/league-percentiles/LeaguePercentilesPanel.js';
 import { ScoutingToolsPrototype } from '@/features/scouting-tools/ScoutingToolsPrototype.js';
 import { JawsExpandedBlock } from '@/features/player-card/JawsExpandedBlock.js';
-import {
-  parseStatcastSummaryPayload,
-  type StatcastJsonRow,
-  type StatcastSummaryPayload,
-} from '@/lib/statcastSummaryPayload.js';
+import type { StatcastJsonRow, StatcastSummaryPayload } from '@/lib/statcastSummaryPayload.js';
 import fgTableShell from '@/styles/fgTableShell.module.css';
 import styles from './PlayerCardPanel.module.css';
 
@@ -350,11 +334,6 @@ function headerLinePhysical(bio: MlbBioWirePayload | null, loading: boolean): st
   return chunks.length ? chunks.join(' · ') : null;
 }
 
-function statcastRole(r: CardRole): 'pitcher' | 'batter' {
-  if (r === 'pitching') return 'pitcher';
-  return 'batter';
-}
-
 function fgSeasonMetaForYear(
   seasons: Record<string, unknown>[],
   year: number
@@ -378,16 +357,6 @@ const EMPTY_FG_BATTING_CARD: FgBattingCardApi = {
   jaws_fwar: null,
   peak_war_fwar: null,
 };
-
-async function readJson(res: Response): Promise<unknown> {
-  const text = await res.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return { raw: text };
-  }
-}
 
 function BattingCardTable({
   lines,
@@ -526,16 +495,21 @@ export function PlayerCardPanel({
   const setSeason = controlled ? onSeasonChange! : setSeasonUncontrolled;
   const setRole = controlled ? onRoleChange! : setRoleUncontrolled;
 
+  const {
+    player,
+    fgBattingCard: fgBatFromQ,
+    fgPitchingCard: fgPitFromQ,
+    statcast,
+    fetchingPlayer,
+    fetchingFg,
+    fetchingSc,
+    error,
+  } = usePlayerCardCoreQueries({ playerId, season, role });
+  const fgBattingCard = fgBatFromQ ?? EMPTY_FG_BATTING_CARD;
+  const fgPitchingCard = fgPitFromQ ?? EMPTY_FG_BATTING_CARD;
+
   const theme = useTheme();
   const isMdUp = useMediaQuery(theme.breakpoints.up('md'));
-  const [fetchingPlayer, setFetchingPlayer] = useState(true);
-  const [fetchingFg, setFetchingFg] = useState(true);
-  const [fetchingSc, setFetchingSc] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [player, setPlayer] = useState<PlayerRow | null>(null);
-  const [fgPitchingCard, setFgPitchingCard] = useState<FgBattingCardApi>(EMPTY_FG_BATTING_CARD);
-  const [fgBattingCard, setFgBattingCard] = useState<FgBattingCardApi>(EMPTY_FG_BATTING_CARD);
-  const [statcast, setStatcast] = useState<StatcastSummaryPayload | null>(null);
   /** Desktop-only: narrow Statcast rail when Savant has nothing for this player/year. */
   const [statcastCollapsed, setStatcastCollapsed] = useState(false);
   const [fieldingHistoryRows, setFieldingHistoryRows] = useState<Record<string, unknown>[]>([]);
@@ -551,13 +525,14 @@ export function PlayerCardPanel({
   const hasFgPitching = useMemo(() => fgCardHasAnyRows(fgPitchingCard), [fgPitchingCard]);
 
   useLayoutEffect(() => {
-    if (fetchingFg) return;
+    /** Until player + FG payloads settle, empty placeholder cards look like “no rows” and would wrongly send bat-first users to fielding. */
+    if (fetchingPlayer || fetchingFg || !player) return;
     if (role === 'batting' && !hasFgBatting) {
       setRole(hasFgPitching ? 'pitching' : 'fielding');
     } else if (role === 'pitching' && !hasFgPitching) {
       setRole(hasFgBatting ? 'batting' : 'fielding');
     }
-  }, [fetchingFg, role, hasFgBatting, hasFgPitching, setRole]);
+  }, [fetchingPlayer, fetchingFg, player, role, hasFgBatting, hasFgPitching, setRole]);
 
   const pitchingMixDisplay = useMemo(
     () => filterMixRowsMinPct(statcast?.mix, PITCH_CARD_MIN_USAGE_PCT),
@@ -709,185 +684,6 @@ export function PlayerCardPanel({
       cancelled = true;
     };
   }, [playerId, season, player?.key_mlbam]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const base = `/api/players/${playerId}`;
-    const fgSeasonsQ = new URLSearchParams({ last_seasons: String(FG_CARD_SEASON_ROW_LIMIT) });
-    const fgBatUrl = `${base}/fg-batting-card?${fgSeasonsQ}`;
-    const fgPitUrl = `${base}/fg-pitching-card?${fgSeasonsQ}`;
-
-    const scRole = statcastRole(role === 'fielding' ? 'batting' : role);
-    const scQ = new URLSearchParams({
-      role: scRole,
-      game_year: String(season),
-      limit: scRole === 'batter' ? '8000' : '4000',
-    });
-    const statcastUrl = `${base}/statcast-summary?${scQ}`;
-
-    const cachedPlayer = getCachedPlayer(playerId);
-    const fgBatCached = getCachedFgBatting(playerId);
-    const fgPitCached = getCachedFgPitching(playerId);
-    const cachedStatcast =
-      role === 'fielding' ? undefined : getCachedStatcast(playerId, role, season);
-
-    const needPlayer = cachedPlayer === undefined;
-    /** Always hydrate both FG cards so we can hide Batting/Pitching tabs and correct an invalid `role` from the URL. */
-    const needFg = fgBatCached === undefined || fgPitCached === undefined;
-    const needSc = role !== 'fielding' && cachedStatcast === undefined;
-
-    if (needPlayer) {
-      setPlayer(null);
-    }
-
-    const cacheComplete = !needPlayer && !needFg && !needSc;
-
-    if (cacheComplete) {
-      setError(null);
-      setPlayer(cachedPlayer as PlayerRow);
-      setFgBattingCard(fgBatCached ?? EMPTY_FG_BATTING_CARD);
-      setFgPitchingCard(fgPitCached ?? EMPTY_FG_BATTING_CARD);
-      if (role === 'fielding') {
-        setStatcast(null);
-      } else {
-        setStatcast(cachedStatcast ?? null);
-      }
-      setFetchingPlayer(false);
-      setFetchingFg(false);
-      setFetchingSc(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    setFetchingPlayer(needPlayer);
-    setFetchingFg(needFg);
-    setFetchingSc(needSc);
-    setError(null);
-
-    void (async () => {
-      try {
-        let combinedErr: string | null = null;
-        const pushErr = (msg: string) => {
-          combinedErr = combinedErr ? `${combinedErr}; ${msg}` : msg;
-        };
-
-        let p: PlayerRow | undefined = cachedPlayer as PlayerRow | undefined;
-        if (needPlayer) {
-          const r0 = await fetch(`${base}`);
-          if (cancelled) return;
-
-          if (!r0.ok) {
-            const j = (await readJson(r0)) as { error?: string };
-            setError(j?.error ?? `Player request failed (${r0.status})`);
-            setPlayer(null);
-            setFgPitchingCard(EMPTY_FG_BATTING_CARD);
-            setFgBattingCard(EMPTY_FG_BATTING_CARD);
-            setStatcast(null);
-            setFetchingPlayer(false);
-            setFetchingFg(false);
-            setFetchingSc(false);
-            return;
-          }
-
-          p = (await readJson(r0)) as PlayerRow;
-          if (!cancelled) setCachedPlayer(playerId, p as CachedPlayerRow);
-        }
-
-        if (cancelled) return;
-        setPlayer(p ?? null);
-        if (!cancelled) setFetchingPlayer(false);
-
-        const fgPromise = (async () => {
-          if (!needFg) {
-            setFgBattingCard(fgBatCached ?? EMPTY_FG_BATTING_CARD);
-            setFgPitchingCard(fgPitCached ?? EMPTY_FG_BATTING_CARD);
-            if (!cancelled) setFetchingFg(false);
-            return;
-          }
-          try {
-            const [rb, rp] = await Promise.all([fetch(fgBatUrl), fetch(fgPitUrl)]);
-            if (cancelled) return;
-            if (rb.ok) {
-              const payload = (await readJson(rb)) as FgBattingCardApi;
-              const normalized = normalizeFgCardPayload(payload);
-              setFgBattingCard(normalized);
-              if (!cancelled) setCachedFgBatting(playerId, normalized);
-            } else {
-              const j = (await readJson(rb)) as { error?: string };
-              pushErr(j?.error ?? `FG batting card failed (${rb.status})`);
-              setFgBattingCard(EMPTY_FG_BATTING_CARD);
-            }
-            if (rp.ok) {
-              const payload = (await readJson(rp)) as FgBattingCardApi;
-              const normalized = normalizeFgCardPayload(payload);
-              setFgPitchingCard(normalized);
-              if (!cancelled) setCachedFgPitching(playerId, normalized);
-            } else {
-              const j = (await readJson(rp)) as { error?: string };
-              pushErr(j?.error ?? `FG pitching card failed (${rp.status})`);
-              setFgPitchingCard(EMPTY_FG_BATTING_CARD);
-            }
-          } finally {
-            if (!cancelled) setFetchingFg(false);
-          }
-        })();
-
-        const scPromise = (async () => {
-          if (role === 'fielding') {
-            if (!cancelled) {
-              setStatcast(null);
-              setFetchingSc(false);
-            }
-            return;
-          }
-          if (!needSc) {
-            if (!cancelled) {
-              setStatcast(cachedStatcast!);
-              setFetchingSc(false);
-            }
-            return;
-          }
-          try {
-            const r2 = await fetch(statcastUrl);
-            if (cancelled) return;
-            if (!r2.ok) {
-              const j = (await readJson(r2)) as { error?: string };
-              pushErr(j?.error ?? `Statcast request failed (${r2.status})`);
-              setStatcast(null);
-            } else {
-              const rawSc = await readJson(r2);
-              const scPayload = parseStatcastSummaryPayload(rawSc);
-              if (!scPayload.ok) {
-                pushErr(`Statcast response invalid (${scPayload.error})`);
-                setStatcast(null);
-              } else {
-                setStatcast(scPayload.value);
-                if (!cancelled)
-                  setCachedStatcast(playerId, role as 'batting' | 'pitching', season, scPayload.value);
-              }
-            }
-          } finally {
-            if (!cancelled) setFetchingSc(false);
-          }
-        })();
-
-        await Promise.all([fgPromise, scPromise]);
-
-        if (cancelled) return;
-        setError(combinedErr);
-      } catch (e) {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-        setFetchingFg(false);
-        setFetchingSc(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [playerId, season, role]);
 
   const yearChoices = useMemo(() => {
     const cy = getDefaultCardSeasonYear();
