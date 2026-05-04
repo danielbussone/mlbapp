@@ -99,3 +99,23 @@
   display: block;
   margin-bottom: 4px;
 }
+
+/* Match player card Statcast rail accordions (League percentiles self-wraps when visible). */
+.statcastAccordion {
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  background-color: var(--mui-palette-background-paper, #fff);
+}
+
+.statcastAccordion::before {
+  display: none;
+}
+
+.accordionDetailsFlush {
+  padding-top: 0;
+}
+
+.railAccordionTitle {
+  font-weight: 600;
+}

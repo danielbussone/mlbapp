@@ -8,6 +8,8 @@ import { rowsToJson } from './rowJson.js';
 
 const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 25;
+/** Name matches can be crowded (e.g. common Latin names); keep enough rows after WAR sort. */
+export const NAME_QUERY_CANDIDATE_LIMIT = 16;
 
 export type ResolvePlayerInput = {
   name_query?: string | null;
@@ -23,6 +25,42 @@ const EXTERNEALS_SUB = `
     '[]'::json
   ) AS externals
 `;
+
+/**
+ * FanGraphs career fWAR for `dim_player`: typed ``player_id`` on FG rows or ``id_fg`` via ``fangraphs`` external.
+ */
+const FG_CAREER_FWAR_LATERAL = `
+LEFT JOIN LATERAL (
+  SELECT COALESCE(SUM(COALESCE(x.war::numeric, 0)), 0)::numeric AS career_fwar
+  FROM (
+    SELECT b.war FROM fg_batting_season_current b WHERE b.player_id = p.player_id
+    UNION ALL
+    SELECT f.war FROM fg_pitching_season_current f WHERE f.player_id = p.player_id
+    UNION ALL
+    SELECT b.war FROM fg_batting_season_current b
+    INNER JOIN player_external_identifier e
+      ON e.player_id = p.player_id AND e.id_system = 'fangraphs' AND e.id_value = b.id_fg::text
+    WHERE b.player_id IS NULL
+    UNION ALL
+    SELECT f.war FROM fg_pitching_season_current f
+    INNER JOIN player_external_identifier e
+      ON e.player_id = p.player_id AND e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text
+    WHERE f.player_id IS NULL
+  ) x
+) fgwar ON true
+`;
+
+const NAME_RESOLVE_ORDER_BY = `
+  fgwar.career_fwar DESC NULLS LAST,
+  EXISTS (
+    SELECT 1 FROM player_external_identifier ex
+    WHERE ex.player_id = p.player_id AND ex.id_system = 'fangraphs'
+  ) DESC,
+  p.key_mlbam IS NOT NULL DESC,
+  p.name_last, p.name_first, p.player_id
+`
+  .replace(/\s+/g, ' ')
+  .trim();
 
 const DOLLAR_TAG = 'xcmb';
 
@@ -103,6 +141,7 @@ export async function resolvePlayer(pool: pg.Pool, input: ResolvePlayerInput): P
       SELECT p.player_id, p.key_mlbam, p.name_first, p.name_last, p.birth_date,
              ${EXTERNEALS_SUB}
       FROM dim_player p
+      ${FG_CAREER_FWAR_LATERAL}
       WHERE (
         ${f1} LIKE ${p1}
         AND ${f2} LIKE ${p2}
@@ -111,7 +150,7 @@ export async function resolvePlayer(pool: pg.Pool, input: ResolvePlayerInput): P
         ${f1} LIKE ${p2}
         AND ${f2} LIKE ${p1}
       )
-      ORDER BY p.name_last, p.name_first, p.player_id
+      ORDER BY ${NAME_RESOLVE_ORDER_BY}
       LIMIT $3
       `,
       [a, b, limit]
@@ -129,9 +168,10 @@ export async function resolvePlayer(pool: pg.Pool, input: ResolvePlayerInput): P
       SELECT p.player_id, p.key_mlbam, p.name_first, p.name_last, p.birth_date,
              ${EXTERNEALS_SUB}
       FROM dim_player p
+      ${FG_CAREER_FWAR_LATERAL}
       WHERE ${fl} LIKE ${pt}
          OR ${ff} LIKE ${pt}
-      ORDER BY p.name_last, p.name_first, p.player_id
+      ORDER BY ${NAME_RESOLVE_ORDER_BY}
       LIMIT $2
       `,
       [t, limit]
@@ -178,6 +218,8 @@ export type FgCareerDisambiguationHint = {
   fg_seasons: number;
   /** Top team abbreviations by combined batting+pitching games, comma-separated (up to 5). */
   teams_display: string;
+  /** Sum of FanGraphs season WAR (batting + pitching); used to rank ambiguous name matches. */
+  career_fwar: number;
 };
 
 /**
@@ -192,7 +234,28 @@ export async function getFgCareerHintsForPlayerIds(
 
   const { rows } = await pool.query(
     `
-    WITH seasons AS (
+    WITH war_totals AS (
+      SELECT player_id, SUM(COALESCE(war::numeric, 0))::numeric AS career_fwar
+      FROM (
+        SELECT player_id, war FROM fg_batting_season_current WHERE player_id = ANY($1::bigint[])
+        UNION ALL
+        SELECT player_id, war FROM fg_pitching_season_current WHERE player_id = ANY($1::bigint[])
+        UNION ALL
+        SELECT e.player_id, b.war
+        FROM fg_batting_season_current b
+        INNER JOIN player_external_identifier e
+          ON e.id_system = 'fangraphs' AND e.id_value = b.id_fg::text AND e.player_id = ANY($1::bigint[])
+        WHERE b.player_id IS NULL
+        UNION ALL
+        SELECT e.player_id, f.war
+        FROM fg_pitching_season_current f
+        INNER JOIN player_external_identifier e
+          ON e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text AND e.player_id = ANY($1::bigint[])
+        WHERE f.player_id IS NULL
+      ) w
+      GROUP BY player_id
+    ),
+    seasons AS (
       SELECT DISTINCT s.player_id, s.season
       FROM (
         SELECT b.player_id, b.season::integer AS season
@@ -202,7 +265,20 @@ export async function getFgCareerHintsForPlayerIds(
         SELECT f.player_id, f.season::integer AS season
         FROM fg_pitching_season_current f
         WHERE f.player_id = ANY($1::bigint[])
+        UNION
+        SELECT e.player_id, b.season::integer AS season
+        FROM fg_batting_season_current b
+        INNER JOIN player_external_identifier e
+          ON e.id_system = 'fangraphs' AND e.id_value = b.id_fg::text AND e.player_id = ANY($1::bigint[])
+        WHERE b.player_id IS NULL
+        UNION
+        SELECT e.player_id, f.season::integer AS season
+        FROM fg_pitching_season_current f
+        INNER JOIN player_external_identifier e
+          ON e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text AND e.player_id = ANY($1::bigint[])
+        WHERE f.player_id IS NULL
       ) s
+      WHERE s.player_id IS NOT NULL
     ),
     season_counts AS (
       SELECT player_id, COUNT(*)::integer AS fg_seasons
@@ -221,6 +297,20 @@ export async function getFgCareerHintsForPlayerIds(
         FROM fg_pitching_season_current
         WHERE player_id = ANY($1::bigint[])
           AND team IS NOT NULL AND TRIM(team) <> ''
+        UNION ALL
+        SELECT e.player_id, b.team, b.games
+        FROM fg_batting_season_current b
+        INNER JOIN player_external_identifier e
+          ON e.id_system = 'fangraphs' AND e.id_value = b.id_fg::text AND e.player_id = ANY($1::bigint[])
+        WHERE b.player_id IS NULL
+          AND b.team IS NOT NULL AND TRIM(b.team) <> ''
+        UNION ALL
+        SELECT e.player_id, f.team, f.games
+        FROM fg_pitching_season_current f
+        INNER JOIN player_external_identifier e
+          ON e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text AND e.player_id = ANY($1::bigint[])
+        WHERE f.player_id IS NULL
+          AND f.team IS NOT NULL AND TRIM(f.team) <> ''
       ) u
       GROUP BY player_id, team
     ),
@@ -238,10 +328,12 @@ export async function getFgCareerHintsForPlayerIds(
     SELECT
       pid.player_id::bigint AS player_id,
       COALESCE(sc.fg_seasons, 0)::integer AS fg_seasons,
-      COALESCE(tp.teams_display, '') AS teams_display
+      COALESCE(tp.teams_display, '') AS teams_display,
+      COALESCE(wt.career_fwar, 0)::numeric AS career_fwar
     FROM unnest($1::bigint[]) AS pid(player_id)
     LEFT JOIN season_counts sc ON sc.player_id = pid.player_id
     LEFT JOIN team_pick tp ON tp.player_id = pid.player_id
+    LEFT JOIN war_totals wt ON wt.player_id = pid.player_id
     `,
     [ids]
   );
@@ -249,23 +341,26 @@ export async function getFgCareerHintsForPlayerIds(
     player_id: Number(r.player_id),
     fg_seasons: Number(r.fg_seasons ?? 0),
     teams_display: String(r.teams_display ?? ''),
+    career_fwar: Number(r.career_fwar ?? 0),
   }));
 }
 
-/** One-line copy for pick lists (e.g. “14 seasons with SEA and NYY”). */
+/** One-line copy for pick lists (e.g. “14 seasons with SEA and NYY · 68.4 fWAR”). */
 export function formatCareerDisambiguationHint(h: FgCareerDisambiguationHint): string {
   const n = h.fg_seasons;
+  const war = Number(h.career_fwar ?? 0);
+  const warBit = war > 0 ? ` · ${war.toFixed(1)} fWAR` : '';
   const raw = h.teams_display.trim();
   const parts = raw
     .split(',')
     .map((t) => t.trim())
     .filter(Boolean);
   if (n <= 0) {
-    return 'No FanGraphs MLB seasons on file';
+    return war > 0 ? `${war.toFixed(1)} fWAR (FanGraphs)` : 'No FanGraphs MLB seasons on file';
   }
   const sez = n === 1 ? '1 season' : `${n} seasons`;
   if (parts.length === 0) {
-    return `${sez} in database`;
+    return `${sez} in database${warBit}`;
   }
   let teamsPhrase: string;
   if (parts.length === 1) {
@@ -275,14 +370,14 @@ export function formatCareerDisambiguationHint(h: FgCareerDisambiguationHint): s
   } else {
     teamsPhrase = `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
   }
-  return `${sez} with ${teamsPhrase}`;
+  return `${sez} with ${teamsPhrase}${warBit}`;
 }
 
 export async function resolvePlayerIdFromQuery(
   pool: pg.Pool,
   name_query: string
 ): Promise<{ player_id: number } | { error: string }> {
-  const r = await resolvePlayer(pool, { name_query, limit: 8 });
+  const r = await resolvePlayer(pool, { name_query, limit: NAME_QUERY_CANDIDATE_LIMIT });
   let candidates = r.candidates as Record<string, unknown>[] | undefined;
   if (!candidates?.length) {
     return { error: `No player found for query: ${name_query}` };

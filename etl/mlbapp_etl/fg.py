@@ -16,6 +16,12 @@ Typed columns follow ``docs/SCHEMA_PROPOSAL.md`` (player-card v1 subset).
 ``stats_jsonb`` (hundreds of columns in live data); committed JSON fixtures are
 only small offline samples.
 
+When ``link_players`` is on (default), each snapshot first **upserts**
+``player_external_identifier`` rows (``fangraphs``) by matching ``dim_player.key_mlbam``
+to MLBAM values in ``stats_jsonb`` (same rules as Flyway V36/V37/V38: FanGraphs often
+stores ``xMLBAMID`` as ``681624.0``, matched via ``trunc(...::numeric)``), then runs the
+existing ``UPDATE … SET player_id`` link from those identifiers.
+
 After a successful write (non-dry-run), **refreshes** the materialized views
 ``fg_batting_season_mlb_consolidated`` / ``fg_pitching_season_mlb_consolidated``
 (``REFRESH … CONCURRENTLY`` when the matching facet loaded; Flyway **V13**),
@@ -413,6 +419,154 @@ WHERE f.snapshot_id = %s
   AND f.player_id IS DISTINCT FROM m.player_id
 """
 
+# Resolve MLBAM from ``stats_jsonb`` (canonical keys + any top-level ``%%mlbam%%`` key) and
+# insert ``player_external_identifier`` (``fangraphs``) when ``dim_player.key_mlbam`` matches.
+# Runs once per snapshot before ``_link_fg_table`` so new loads link without waiting for Flyway.
+_UPSERT_EXT_BAT_SNAPSHOT = r"""
+INSERT INTO player_external_identifier (player_id, id_system, id_value)
+SELECT DISTINCT ON (dp.player_id)
+  dp.player_id,
+  'fangraphs',
+  f.id_fg::text
+FROM fg_batting_season f
+CROSS JOIN LATERAL (
+  SELECT trim(COALESCE(
+    NULLIF(TRIM(f.stats_jsonb->>'xMLBAMID'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'MLBAMID'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'MLBAM'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'mlbam'), ''),
+    (
+      SELECT trim(kv.value)
+      FROM jsonb_each_text(f.stats_jsonb) AS kv
+      WHERE kv.key ILIKE '%mlbam%'
+        AND kv.key !~* '^(playerid|idfg)$'
+        AND trim(kv.value) ~ '^[0-9]{5,9}(\.[0-9]+)?$'
+      LIMIT 1
+    )
+  )) AS raw_str
+) r
+INNER JOIN dim_player dp ON dp.key_mlbam IS NOT NULL
+  AND r.raw_str IS NOT NULL
+  AND r.raw_str <> ''
+  AND r.raw_str ~ '^[0-9]+(\.[0-9]+)?$'
+  AND trunc(r.raw_str::numeric)::bigint = dp.key_mlbam::bigint
+WHERE f.snapshot_id = %s::uuid
+  AND f.level = 'MLB'
+  AND f.stats_jsonb IS NOT NULL
+  AND (f.player_id IS NULL OR f.player_id = dp.player_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM player_external_identifier e
+    WHERE e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM player_external_identifier e2
+    WHERE e2.player_id = dp.player_id AND e2.id_system = 'fangraphs'
+  )
+ORDER BY dp.player_id, f.season DESC NULLS LAST, f.id_fg
+"""
+
+_UPSERT_EXT_PIT_SNAPSHOT = r"""
+INSERT INTO player_external_identifier (player_id, id_system, id_value)
+SELECT DISTINCT ON (dp.player_id)
+  dp.player_id,
+  'fangraphs',
+  f.id_fg::text
+FROM fg_pitching_season f
+CROSS JOIN LATERAL (
+  SELECT trim(COALESCE(
+    NULLIF(TRIM(f.stats_jsonb->>'xMLBAMID'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'MLBAMID'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'MLBAM'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'mlbam'), ''),
+    (
+      SELECT trim(kv.value)
+      FROM jsonb_each_text(f.stats_jsonb) AS kv
+      WHERE kv.key ILIKE '%mlbam%'
+        AND kv.key !~* '^(playerid|idfg)$'
+        AND trim(kv.value) ~ '^[0-9]{5,9}(\.[0-9]+)?$'
+      LIMIT 1
+    )
+  )) AS raw_str
+) r
+INNER JOIN dim_player dp ON dp.key_mlbam IS NOT NULL
+  AND r.raw_str IS NOT NULL
+  AND r.raw_str <> ''
+  AND r.raw_str ~ '^[0-9]+(\.[0-9]+)?$'
+  AND trunc(r.raw_str::numeric)::bigint = dp.key_mlbam::bigint
+WHERE f.snapshot_id = %s::uuid
+  AND f.level = 'MLB'
+  AND f.stats_jsonb IS NOT NULL
+  AND (f.player_id IS NULL OR f.player_id = dp.player_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM player_external_identifier e
+    WHERE e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM player_external_identifier e2
+    WHERE e2.player_id = dp.player_id AND e2.id_system = 'fangraphs'
+  )
+ORDER BY dp.player_id, f.season DESC NULLS LAST, f.id_fg
+"""
+
+_UPSERT_EXT_FLD_SNAPSHOT = r"""
+INSERT INTO player_external_identifier (player_id, id_system, id_value)
+SELECT DISTINCT ON (dp.player_id)
+  dp.player_id,
+  'fangraphs',
+  f.id_fg::text
+FROM fg_fielding_season f
+CROSS JOIN LATERAL (
+  SELECT trim(COALESCE(
+    NULLIF(TRIM(f.stats_jsonb->>'xMLBAMID'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'MLBAMID'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'MLBAM'), ''),
+    NULLIF(TRIM(f.stats_jsonb->>'mlbam'), ''),
+    (
+      SELECT trim(kv.value)
+      FROM jsonb_each_text(f.stats_jsonb) AS kv
+      WHERE kv.key ILIKE '%mlbam%'
+        AND kv.key !~* '^(playerid|idfg)$'
+        AND trim(kv.value) ~ '^[0-9]{5,9}(\.[0-9]+)?$'
+      LIMIT 1
+    )
+  )) AS raw_str
+) r
+INNER JOIN dim_player dp ON dp.key_mlbam IS NOT NULL
+  AND r.raw_str IS NOT NULL
+  AND r.raw_str <> ''
+  AND r.raw_str ~ '^[0-9]+(\.[0-9]+)?$'
+  AND trunc(r.raw_str::numeric)::bigint = dp.key_mlbam::bigint
+WHERE f.snapshot_id = %s::uuid
+  AND f.level = 'MLB'
+  AND f.stats_jsonb IS NOT NULL
+  AND (f.player_id IS NULL OR f.player_id = dp.player_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM player_external_identifier e
+    WHERE e.id_system = 'fangraphs' AND e.id_value = f.id_fg::text
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM player_external_identifier e2
+    WHERE e2.player_id = dp.player_id AND e2.id_system = 'fangraphs'
+  )
+ORDER BY dp.player_id, f.season DESC NULLS LAST, f.id_fg
+"""
+
+
+def _upsert_fangraphs_external_from_fg_snapshot(
+    cur: Any, snapshot_id: uuid.UUID, facet: str
+) -> int:
+    if facet == "batting":
+        sql = _UPSERT_EXT_BAT_SNAPSHOT
+    elif facet == "pitching":
+        sql = _UPSERT_EXT_PIT_SNAPSHOT
+    elif facet == "fielding":
+        sql = _UPSERT_EXT_FLD_SNAPSHOT
+    else:
+        msg = "invalid facet for FanGraphs external upsert"
+        raise ValueError(msg)
+    cur.execute(sql, (str(snapshot_id),))
+    return cur.rowcount
+
 
 def _link_fg_table(cur: Any, table: str, snapshot_id: uuid.UUID) -> int:
     if table == "fg_batting_season":
@@ -505,6 +659,9 @@ def run_fg_etl(
                     cur.execute(_BAT_SQL, _batting_row(sid, row))
                 out.append(("fangraphs_batting", sid))
                 if link_players:
+                    linked["fangraphs_batting_external_upsert"] = (
+                        _upsert_fangraphs_external_from_fg_snapshot(cur, sid, "batting")
+                    )
                     linked["fangraphs_batting"] = _link_fg_table(cur, "fg_batting_season", sid)
             if pit_df is not None:
                 sid = uuid.uuid4()
@@ -525,6 +682,9 @@ def run_fg_etl(
                     cur.execute(_PIT_SQL, _pitching_row(sid, row))
                 out.append(("fangraphs_pitching", sid))
                 if link_players:
+                    linked["fangraphs_pitching_external_upsert"] = (
+                        _upsert_fangraphs_external_from_fg_snapshot(cur, sid, "pitching")
+                    )
                     linked["fangraphs_pitching"] = _link_fg_table(cur, "fg_pitching_season", sid)
             if fld_df is not None:
                 sid = uuid.uuid4()
@@ -545,6 +705,9 @@ def run_fg_etl(
                     cur.execute(_FLD_SQL, _fielding_row(sid, row))
                 out.append(("fangraphs_fielding", sid))
                 if link_players:
+                    linked["fangraphs_fielding_external_upsert"] = (
+                        _upsert_fangraphs_external_from_fg_snapshot(cur, sid, "fielding")
+                    )
                     linked["fangraphs_fielding"] = _link_fg_table(cur, "fg_fielding_season", sid)
         conn.commit()
 

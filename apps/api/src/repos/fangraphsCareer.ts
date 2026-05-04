@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { playerFgPredicate, playerFgPredicateConsolidated } from './fangraphsFielding.js';
 import { rowToJson, rowsToJson } from './rowJson.js';
 
 /** Reject pure-numeric FG values mis-mapped as position (e.g. rate columns under `Pos`). */
@@ -40,18 +41,7 @@ export function pitcherJawsCohortRoleKey(
   return null;
 }
 
-/** Match FG rows to dim_player by surrogate id or fangraphs external id. */
-export function playerFgPredicate(alias: string): string {
-  return `(
-    ${alias}.player_id = $1
-    OR EXISTS (
-      SELECT 1 FROM player_external_identifier m
-      WHERE m.player_id = $1 AND m.id_system = 'fangraphs' AND m.id_value = ${alias}.id_fg::text
-    )
-  )`;
-}
-
-/** id_fg candidates for this player (same disjunction as playerFgPredicate, without scanning all careers). */
+/** id_fg candidates for this player: ``player_id`` on consolidated rows or ``fangraphs`` external (see V36 backfill). */
 function fgResolvedIdFgCte(
   consolidatedTable: 'fg_batting_season_mlb_consolidated' | 'fg_pitching_season_mlb_consolidated'
 ): string {
@@ -458,7 +448,7 @@ export async function getFgBattingCardPayload(
   const seasonsSql = `
     SELECT s.*
     FROM fg_batting_season_mlb_consolidated s
-    WHERE ${playerFgPredicate('s')}
+    WHERE ${playerFgPredicateConsolidated('s', 'batting')}
     ORDER BY s.season DESC
     LIMIT $2
   `;
@@ -472,7 +462,7 @@ export async function getFgBattingCardPayload(
           : `BOOL_OR(s.season = $2::smallint) AS has_row`
       }
     FROM fg_batting_season_mlb_consolidated s
-    WHERE ${playerFgPredicate('s')}
+    WHERE ${playerFgPredicateConsolidated('s', 'batting')}
   `;
 
   const seasonsParams = [playerId, lim];
@@ -561,7 +551,7 @@ export async function getFgPitchingCardPayload(
   const seasonsSql = `
     SELECT s.*
     FROM fg_pitching_season_mlb_consolidated s
-    WHERE ${playerFgPredicate('s')}
+    WHERE ${playerFgPredicateConsolidated('s', 'pitching')}
     ORDER BY s.season DESC
     LIMIT $2
   `;
@@ -575,7 +565,7 @@ export async function getFgPitchingCardPayload(
           : `BOOL_OR(s.season = $2::smallint) AS has_row`
       }
     FROM fg_pitching_season_mlb_consolidated s
-    WHERE ${playerFgPredicate('s')}
+    WHERE ${playerFgPredicateConsolidated('s', 'pitching')}
   `;
 
   const seasonsParams = [playerId, lim];

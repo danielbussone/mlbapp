@@ -1,11 +1,10 @@
-import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
+import Accordion from '@mui/material/Accordion';
+import AccordionDetails from '@mui/material/AccordionDetails';
+import AccordionSummary from '@mui/material/AccordionSummary';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Collapse from '@mui/material/Collapse';
-import Skeleton from '@mui/material/Skeleton';
 import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
 import Slider from '@mui/material/Slider';
 import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
@@ -18,6 +17,7 @@ import {
   thumbColorForGoodnessPercentile,
 } from './percentileGoodnessColor.js';
 import { pitchTypeName } from '@/features/pitch-mix/pitchTypeLabels.js';
+import { PercentileCollapsibleSection } from './PercentileCollapsibleSection.js';
 import styles from './LeaguePercentilesPanel.module.css';
 
 export type LeaguePercentilesCardRole = 'batting' | 'pitching' | 'fielding';
@@ -74,6 +74,13 @@ const SAVANT_PITCHING_WAR_ORDER = ['fg_season_pit_war_fip', 'fg_season_pit_war_r
 /** xERA / xBA allowed (pitching card; own collapsible, default collapsed). */
 const SAVANT_PITCHING_EXPECTED_ORDER = ['fg_season_pit_xera', 'fg_season_pit_xfip', 'pitch_avg_estimated_ba_allowed'] as const;
 
+/** FanGraphs did not publish season-level sp_stuff / sp_location / sp_pitching until later; hide row when no cohort and no value. */
+const FG_SEASON_PITCHING_PLUS_IDS: ReadonlySet<string> = new Set([
+  'fg_season_pit_stuff_plus',
+  'fg_season_pit_location_plus',
+  'fg_season_pit_pitching_plus',
+]);
+
 const SAVANT_PITCHING_ORDER = [
   'pitch_ff_avg_velo',
   'pitch_avg_exit_velo_on_bip',
@@ -83,6 +90,20 @@ const SAVANT_PITCHING_ORDER = [
   'pitch_avg_release_extension',
   'fg_season_pit_k_pct',
   'fg_season_pit_bb_pct',
+  'fg_season_pit_fbv',
+  'fg_season_pit_fg_o_swing_pct',
+  'fg_season_pit_fg_swstr_pct',
+  'fg_season_pit_fg_zone_pct',
+  'fg_season_pit_fg_gb_pct',
+  'fg_season_pit_fg_iffb_pct',
+  'fg_season_pit_fg_hard_pct',
+  'fg_season_pit_hr_fb_pct',
+  'fg_season_pit_babip',
+  'fg_season_pit_era',
+  'fg_season_pit_fip',
+  'fg_season_pit_stuff_plus',
+  'fg_season_pit_location_plus',
+  'fg_season_pit_pitching_plus',
   'pitch_barrel_pct_allowed',
   'pitch_hard_hit_pct_allowed',
   'pitch_sweet_spot_pct_allowed',
@@ -94,6 +115,9 @@ const SAVANT_PITCHING_ORDER = [
 ] as const;
 
 const PITCHTYPE_ORDER = [
+  'pitch_fg_stuff_plus',
+  'pitch_fg_location_plus',
+  'pitch_fg_pitching_plus',
   'pitch_avg_velo',
   'pitch_avg_spin',
   'pitch_avg_pfx_x',
@@ -173,6 +197,23 @@ const LABELS: Record<string, string> = {
   pitch_sweet_spot_pct_allowed: 'Sweet-spot % allowed',
   fg_season_pit_k_pct: 'K%',
   fg_season_pit_bb_pct: 'BB%',
+  fg_season_pit_fbv: 'FBv (FanGraphs)',
+  fg_season_pit_fg_o_swing_pct: 'O-Swing%',
+  fg_season_pit_fg_swstr_pct: 'SwStr% (FanGraphs)',
+  fg_season_pit_fg_zone_pct: 'Zone% (FanGraphs)',
+  fg_season_pit_fg_gb_pct: 'GB% (FanGraphs)',
+  fg_season_pit_fg_iffb_pct: 'IFFB%',
+  fg_season_pit_fg_hard_pct: 'Hard%',
+  fg_season_pit_hr_fb_pct: 'HR/FB',
+  fg_season_pit_babip: 'BABIP',
+  fg_season_pit_era: 'ERA',
+  fg_season_pit_fip: 'FIP',
+  fg_season_pit_stuff_plus: 'Stuff+',
+  fg_season_pit_location_plus: 'Location+',
+  fg_season_pit_pitching_plus: 'Pitching+',
+  pitch_fg_stuff_plus: 'Stuff+',
+  pitch_fg_location_plus: 'Location+',
+  pitch_fg_pitching_plus: 'Pitching+',
   pitch_avg_velo: 'Velo (mph)',
   pitch_avg_spin: 'Spin (rpm)',
   pitch_avg_pfx_x: 'Horiz. break (ft)',
@@ -237,6 +278,28 @@ const STAT_TOOLTIPS: Record<string, string> = {
   pitch_sweet_spot_pct_allowed: 'Share of batted balls allowed in the sweet-spot launch band.',
   fg_season_pit_k_pct: 'Strikeout rate for the season.',
   fg_season_pit_bb_pct: 'Walk rate for the season.',
+  fg_season_pit_fbv:
+    'FanGraphs fastball velocity (vFA / FBv from the season row; TOT row when present). Used when Statcast velo is unavailable.',
+  fg_season_pit_fg_o_swing_pct: 'FanGraphs chase rate (O-Swing%) from the leaderboard row; cohort from FG-pitching seasons with enough TBF.',
+  fg_season_pit_fg_swstr_pct: 'FanGraphs swinging-strike rate per pitch (SwStr%).',
+  fg_season_pit_fg_zone_pct: 'FanGraphs zone rate (Zone%) — pitches in the strike zone.',
+  fg_season_pit_fg_gb_pct: 'FanGraphs ground-ball share on batted balls (typed GB% when present).',
+  fg_season_pit_fg_iffb_pct: 'FanGraphs infield-fly share (IFFB%) on fly balls.',
+  fg_season_pit_fg_hard_pct: 'FanGraphs hard-hit share (Hard%) on batted balls (lower is better for pitchers).',
+  fg_season_pit_hr_fb_pct: 'FanGraphs home runs per fly ball (HR/FB).',
+  fg_season_pit_babip:
+    'FanGraphs batting average on balls in play allowed (typed BABIP or json). Lower is usually better for pitchers (defense/luck noise).',
+  fg_season_pit_era: 'Earned run average for the season (FanGraphs MLB row, TOT when present).',
+  fg_season_pit_fip: 'Fielding-independent pitching for the season (FanGraphs MLB row).',
+  fg_season_pit_stuff_plus:
+    'FanGraphs season Stuff+ from the MLB row (stats_jsonb ``sp_stuff`` or legacy ``Stuff+``; 100 ≈ league average; not a sum of pitch-type rows).',
+  fg_season_pit_location_plus:
+    'FanGraphs season Location+ from the MLB row (``sp_location`` or ``Location+``).',
+  fg_season_pit_pitching_plus:
+    'FanGraphs season Pitching+ from the MLB row (``sp_pitching`` or ``Pitching+``).',
+  pitch_fg_stuff_plus: 'FanGraphs Stuff+ for this pitch type only (sp_s_* on the season row; 2020+). Main list shows season-level Stuff+.',
+  pitch_fg_location_plus: 'FanGraphs Location+ for this pitch type (sp_l_*). Main list shows season-level Location+.',
+  pitch_fg_pitching_plus: 'FanGraphs Pitching+ for this pitch type (sp_p_*). Main list shows season-level Pitching+.',
   pitch_avg_velo: 'Average velocity for this pitch type.',
   pitch_avg_spin: 'Average spin rate for this pitch type in rpm.',
   pitch_avg_pfx_x: 'Average horizontal movement in feet for this pitch type.',
@@ -292,7 +355,26 @@ function formatValue(metricId: string, v: number | null): string {
     return v.toFixed(3);
   }
   if (metricId === 'fg_season_wrc_plus') return v.toFixed(0);
-  if (metricId === 'fg_season_pit_xera' || metricId === 'fg_season_pit_xfip') return v.toFixed(2);
+  if (
+    metricId === 'fg_season_pit_xera' ||
+    metricId === 'fg_season_pit_xfip' ||
+    metricId === 'fg_season_pit_era' ||
+    metricId === 'fg_season_pit_fip'
+  ) {
+    return v.toFixed(2);
+  }
+  if (
+    metricId === 'fg_season_pit_stuff_plus' ||
+    metricId === 'fg_season_pit_location_plus' ||
+    metricId === 'fg_season_pit_pitching_plus' ||
+    metricId === 'pitch_fg_stuff_plus' ||
+    metricId === 'pitch_fg_location_plus' ||
+    metricId === 'pitch_fg_pitching_plus'
+  ) {
+    return v.toFixed(1);
+  }
+  if (metricId === 'fg_season_pit_fbv') return v.toFixed(1);
+  if (metricId === 'fg_season_pit_babip') return v.toFixed(3);
   if (metricId === 'fg_season_avg') return v.toFixed(3);
   if (metricId === 'fg_season_slg') return v.toFixed(3);
   if (metricId === 'fg_season_iso') return v.toFixed(3);
@@ -490,6 +572,90 @@ function renderOrderedFieldingRows(slots: Record<string, PercentileSlot> | undef
   return renderOrderedRows(order, slots);
 }
 
+function renderOrderedPitchingMainRows(slots: Record<string, PercentileSlot> | undefined): ReactNode[] {
+  if (!slots) return [];
+  const out: ReactNode[] = [];
+  for (const id of SAVANT_PITCHING_ORDER) {
+    const slot = slots[id];
+    if (!slot) continue;
+    if (
+      FG_SEASON_PITCHING_PLUS_IDS.has(id) &&
+      (slot.n ?? 0) === 0 &&
+      (slot.value == null || !Number.isFinite(slot.value))
+    ) {
+      continue;
+    }
+    out.push(<PercentileRow key={id} metricId={id} slot={slot} />);
+  }
+  return out;
+}
+
+/** True when the panel would show at least one percentile row (or pitch-type / running block), not only empty captions. */
+function percentilesPanelHasContent(data: LeaguePercentilesResponse, pitchTypes: string[] | undefined): boolean {
+  if (!data.percentiles_available) return false;
+  if (data.role === 'batter') {
+    const bat = data.savant_batting ?? data.percentiles ?? {};
+    const run = data.savant_running;
+    const hasValueSection = SAVANT_BATTING_VALUE_ORDER.some((id) => fieldingSlotHasValue(bat[id]));
+    const hasExpectedSection = SAVANT_BATTING_EXPECTED_ORDER.some((id) => fieldingSlotHasValue(bat[id]));
+    const hasBatPath = SAVANT_BATTING_BAT_PATH_ORDER.some((id) => fieldingSlotHasValue(bat[id]));
+    const hasMain = SAVANT_BATTING_ORDER.some((id) => bat[id] != null);
+    const hasRun = run != null && SAVANT_RUNNING_ORDER.some((id) => run[id] != null);
+    return hasValueSection || hasExpectedSection || hasBatPath || hasMain || hasRun;
+  }
+  if (data.role === 'pitcher') {
+    const pit = data.savant_pitching ?? data.season?.percentiles ?? {};
+    const byPt = data.by_pitch_type ?? {};
+    const types = (pitchTypes ?? []).filter((t) => byPt[t]);
+    const hasWar = SAVANT_PITCHING_WAR_ORDER.some((id) => fieldingSlotHasValue(pit[id]));
+    const hasVal = SAVANT_PITCHING_VALUE_ORDER.some((id) => fieldingSlotHasValue(pit[id]));
+    const hasExp = SAVANT_PITCHING_EXPECTED_ORDER.some((id) => fieldingSlotHasValue(pit[id]));
+    const hasMain = SAVANT_PITCHING_ORDER.some((id) => {
+      const s = pit[id];
+      if (!s) return false;
+      if (FG_SEASON_PITCHING_PLUS_IDS.has(id)) {
+        return (s.n ?? 0) > 0 || (s.value != null && Number.isFinite(s.value));
+      }
+      return true;
+    });
+    return hasWar || hasVal || hasExp || hasMain || types.length > 0;
+  }
+  if (data.role === 'fielding') {
+    const run = data.savant_running;
+    const catching = data.savant_catching;
+    const hasCatching =
+      catching != null &&
+      SAVANT_CATCHING_VALUE_ORDER.some((id) => fieldingSlotHasValue(catching[id]));
+    const hasRun = run != null && SAVANT_RUNNING_ORDER.some((id) => run[id] != null);
+    const groups = data.fielding_percentile_groups;
+    const totalGroup = groups?.find((g) => g.position_key === 'TOTAL');
+    const perPositionGroups = (groups ?? [])
+      .filter((g) => g.position_key !== 'TOTAL')
+      .filter((g) => SAVANT_FIELDING_ORDER.some((id) => fieldingSlotHasValue(g.percentiles[id])));
+    const hasPerPosition = perPositionGroups.length > 0;
+    if (totalGroup != null) {
+      const totalHasRows = SAVANT_FIELDING_ORDER.some((id) => fieldingSlotHasValue(totalGroup.percentiles[id]));
+      return totalHasRows || hasPerPosition || hasCatching || hasRun;
+    }
+    const fallbackRows = renderOrderedFieldingRows(data.savant_fielding ?? data.percentiles ?? {});
+    return fallbackRows.length > 0 || hasCatching || hasRun;
+  }
+  return false;
+}
+
+function wrapLeaguePercentilesRail(inner: ReactNode) {
+  return (
+    <Accordion defaultExpanded disableGutters elevation={0} className={styles.statcastAccordion}>
+      <AccordionSummary expandIcon={<ExpandMore fontSize="small" />}>
+        <Typography variant="subtitle2" className={styles.railAccordionTitle}>
+          League percentiles
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails className={styles.accordionDetailsFlush}>{inner}</AccordionDetails>
+    </Accordion>
+  );
+}
+
 export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCode: _positionCode, pitchTypes }: Props) {
   const [data, setData] = useState<LeaguePercentilesResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -547,15 +713,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
   }, [playerId, season, cardRole]);
 
   if (loading) {
-    return (
-      <Stack spacing={1} aria-busy="true" aria-label="Loading league percentiles">
-        <Skeleton variant="text" width="40%" height={20} />
-        <Skeleton variant="rounded" width="100%" height={44} />
-        <Skeleton variant="rounded" width="100%" height={44} />
-        <Skeleton variant="rounded" width="100%" height={44} />
-        <Skeleton variant="rounded" width="88%" height={44} />
-      </Stack>
-    );
+    return null;
   }
   if (err) {
     return (
@@ -564,13 +722,8 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
       </Alert>
     );
   }
-  if (!data || !data.percentiles_available) {
-    return (
-      <Alert severity="info" className={styles.alertDense}>
-        {data?.reason ??
-          'League percentiles unavailable (refresh Statcast MVs after migrate: pnpm db:refresh-percentiles).'}
-      </Alert>
-    );
+  if (!data || !percentilesPanelHasContent(data, pitchTypes)) {
+    return null;
   }
 
   if (data.role === 'batter') {
@@ -582,60 +735,36 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
     const hasBattingBatPath = battingBatPathIds.length > 0;
     const battingExpectedIds = SAVANT_BATTING_EXPECTED_ORDER.filter((id) => fieldingSlotHasValue(bat[id]));
     const hasBattingExpected = battingExpectedIds.length > 0;
-    return (
+    return wrapLeaguePercentilesRail(
       <Box className={styles.panelCard}>
         <Typography variant="subtitle2" className={styles.panelTitle}>
           Percentiles
         </Typography>
         {hasBattingValue && (
           <>
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={battingValueOpen}
-                  aria-label={battingValueOpen ? 'Hide Value percentile rows' : 'Show Value percentile rows'}
-                  onClick={() => setBattingValueOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {battingValueOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Value
-                </Typography>
-              </Stack>
-              <Collapse in={battingValueOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(battingValueIds, bat)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="Value"
+              open={battingValueOpen}
+              onToggle={() => setBattingValueOpen((o) => !o)}
+              ariaLabelExpanded="Hide Value percentile rows"
+              ariaLabelCollapsed="Show Value percentile rows"
+            >
+              {renderOrderedRows(battingValueIds, bat)}
+            </PercentileCollapsibleSection>
             <Divider className={styles.sectionDivider} />
           </>
         )}
         {hasBattingExpected && (
           <>
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={battingExpectedStatsOpen}
-                  aria-label={
-                    battingExpectedStatsOpen
-                      ? 'Hide Expected stats percentile rows'
-                      : 'Show Expected stats percentile rows'
-                  }
-                  onClick={() => setBattingExpectedStatsOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {battingExpectedStatsOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Expected stats
-                </Typography>
-              </Stack>
-              <Collapse in={battingExpectedStatsOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(battingExpectedIds, bat)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="Expected stats"
+              open={battingExpectedStatsOpen}
+              onToggle={() => setBattingExpectedStatsOpen((o) => !o)}
+              ariaLabelExpanded="Hide Expected stats percentile rows"
+              ariaLabelCollapsed="Show Expected stats percentile rows"
+            >
+              {renderOrderedRows(battingExpectedIds, bat)}
+            </PercentileCollapsibleSection>
             <Divider className={styles.sectionDivider} />
           </>
         )}
@@ -643,27 +772,15 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
         {hasBattingBatPath && (
           <>
             <Divider className={styles.sectionDivider} />
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={battingBatPathOpen}
-                  aria-label={
-                    battingBatPathOpen ? 'Hide Bat path percentile rows' : 'Show Bat path percentile rows'
-                  }
-                  onClick={() => setBattingBatPathOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {battingBatPathOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Bat path
-                </Typography>
-              </Stack>
-              <Collapse in={battingBatPathOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(battingBatPathIds, bat)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="Bat path"
+              open={battingBatPathOpen}
+              onToggle={() => setBattingBatPathOpen((o) => !o)}
+              ariaLabelExpanded="Hide Bat path percentile rows"
+              ariaLabelCollapsed="Show Bat path percentile rows"
+            >
+              {renderOrderedRows(battingBatPathIds, bat)}
+            </PercentileCollapsibleSection>
           </>
         )}
         {run && SAVANT_RUNNING_ORDER.some((id) => run[id]) && (
@@ -679,129 +796,84 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
     );
   }
 
-  if (data.role === 'pitcher' && (data.season?.percentiles || data.savant_pitching)) {
+  if (data.role === 'pitcher') {
     const byPt = data.by_pitch_type ?? {};
     const types = (pitchTypes ?? []).filter((t) => byPt[t]);
-    const pit = data.savant_pitching ?? data.season!.percentiles;
+    const pit = data.savant_pitching ?? data.season?.percentiles ?? {};
     const pitchingWarIds = SAVANT_PITCHING_WAR_ORDER.filter((id) => fieldingSlotHasValue(pit[id]));
     const hasPitchingWar = pitchingWarIds.length > 0;
     const pitchingValueIds = SAVANT_PITCHING_VALUE_ORDER.filter((id) => fieldingSlotHasValue(pit[id]));
     const hasPitchingValue = pitchingValueIds.length > 0;
     const pitchingExpectedIds = SAVANT_PITCHING_EXPECTED_ORDER.filter((id) => fieldingSlotHasValue(pit[id]));
     const hasPitchingExpected = pitchingExpectedIds.length > 0;
-    return (
+    return wrapLeaguePercentilesRail(
       <Box className={styles.panelCard}>
         <Typography variant="subtitle2" className={styles.panelTitle}>
           Percentiles
         </Typography>
         {hasPitchingWar && (
           <>
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={pitchingWarOpen}
-                  aria-label={pitchingWarOpen ? 'Hide WAR percentile rows' : 'Show WAR percentile rows'}
-                  onClick={() => setPitchingWarOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {pitchingWarOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Value
-                </Typography>
-              </Stack>
-              <Collapse in={pitchingWarOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(pitchingWarIds, pit)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="WAR"
+              open={pitchingWarOpen}
+              onToggle={() => setPitchingWarOpen((o) => !o)}
+              ariaLabelExpanded="Hide WAR percentile rows"
+              ariaLabelCollapsed="Show WAR percentile rows"
+            >
+              {renderOrderedRows(pitchingWarIds, pit)}
+            </PercentileCollapsibleSection>
             <Divider className={styles.sectionDivider} />
           </>
         )}
         {hasPitchingValue && (
           <>
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={pitchingValueOpen}
-                  aria-label={pitchingValueOpen ? 'Hide Value percentile rows' : 'Show Value percentile rows'}
-                  onClick={() => setPitchingValueOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {pitchingValueOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Value
-                </Typography>
-              </Stack>
-              <Collapse in={pitchingValueOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(pitchingValueIds, pit)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="Value"
+              open={pitchingValueOpen}
+              onToggle={() => setPitchingValueOpen((o) => !o)}
+              ariaLabelExpanded="Hide Value percentile rows"
+              ariaLabelCollapsed="Show Value percentile rows"
+            >
+              {renderOrderedRows(pitchingValueIds, pit)}
+            </PercentileCollapsibleSection>
             <Divider className={styles.sectionDivider} />
           </>
         )}
         {hasPitchingExpected && (
           <>
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={pitchingExpectedStatsOpen}
-                  aria-label={
-                    pitchingExpectedStatsOpen
-                      ? 'Hide Expected stats percentile rows'
-                      : 'Show Expected stats percentile rows'
-                  }
-                  onClick={() => setPitchingExpectedStatsOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {pitchingExpectedStatsOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Expected stats
-                </Typography>
-              </Stack>
-              <Collapse in={pitchingExpectedStatsOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(pitchingExpectedIds, pit)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="Expected stats"
+              open={pitchingExpectedStatsOpen}
+              onToggle={() => setPitchingExpectedStatsOpen((o) => !o)}
+              ariaLabelExpanded="Hide Expected stats percentile rows"
+              ariaLabelCollapsed="Show Expected stats percentile rows"
+            >
+              {renderOrderedRows(pitchingExpectedIds, pit)}
+            </PercentileCollapsibleSection>
             <Divider className={styles.sectionDivider} />
           </>
         )}
-        {renderOrderedRows(SAVANT_PITCHING_ORDER, pit)}
+        {renderOrderedPitchingMainRows(pit)}
         {types.length > 0 && (
           <>
             <Divider className={styles.sectionDivider} />
             {types.map((pt) => {
               const expanded = Boolean(pitchTypeOpen[pt]);
               return (
-                <Box key={pt} className={styles.pitchTypeBlock}>
-                  <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                    <IconButton
-                      size="small"
-                      aria-expanded={expanded}
-                      aria-label={expanded ? `Hide ${pt} percentile rows` : `Show ${pt} percentile rows`}
-                      onClick={() => setPitchTypeOpen((o) => ({ ...o, [pt]: !expanded }))}
-                      className={styles.iconTight}
-                    >
-                      {expanded ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                    </IconButton>
-                    <Typography variant="caption" className={styles.pitchTypeLabel}>
-                      {pitchTypeName(pt)} ({pt})
-                    </Typography>
-                  </Stack>
-                  <Collapse in={expanded} timeout="auto" unmountOnExit>
-                    <Box className={styles.indent}>
-                      {PITCHTYPE_ORDER.map((id) => {
-                        const slot = byPt[pt]?.[id];
-                        if (!slot) return null;
-                        return <PercentileRow key={`${pt}-${id}`} metricId={id} slot={slot} />;
-                      })}
-                    </Box>
-                  </Collapse>
-                </Box>
+                <PercentileCollapsibleSection
+                  key={pt}
+                  title={`${pitchTypeName(pt)} (${pt})`}
+                  open={expanded}
+                  onToggle={() => setPitchTypeOpen((o) => ({ ...o, [pt]: !expanded }))}
+                  ariaLabelExpanded={`Hide ${pt} percentile rows`}
+                  ariaLabelCollapsed={`Show ${pt} percentile rows`}
+                >
+                  {PITCHTYPE_ORDER.map((id) => {
+                    const slot = byPt[pt]?.[id];
+                    if (!slot) return null;
+                    return <PercentileRow key={`${pt}-${id}`} metricId={id} slot={slot} />;
+                  })}
+                </PercentileCollapsibleSection>
               );
             })}
           </>
@@ -826,7 +898,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
     const hasPerPosition = perPositionGroups.length > 0;
     const totalHasRows =
       totalGroup != null && SAVANT_FIELDING_ORDER.some((id) => fieldingSlotHasValue(totalGroup.percentiles[id]));
-    return (
+    return wrapLeaguePercentilesRail(
       <Box className={styles.panelCard}>
         <Typography variant="subtitle2" className={styles.panelTitle}>
           Percentiles
@@ -849,25 +921,16 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
             {perPositionGroups.map((g) => {
               const expanded = Boolean(fieldingPosOpen[g.position_key]);
               return (
-                <Box key={g.position_key} className={styles.pitchTypeBlock}>
-                  <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                    <IconButton
-                      size="small"
-                      aria-expanded={expanded}
-                      aria-label={expanded ? `Hide ${g.label} percentile rows` : `Show ${g.label} percentile rows`}
-                      onClick={() => setFieldingPosOpen((o) => ({ ...o, [g.position_key]: !expanded }))}
-                      className={styles.iconTight}
-                    >
-                      {expanded ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                    </IconButton>
-                    <Typography variant="caption" className={styles.pitchTypeLabel}>
-                      {g.label}
-                    </Typography>
-                  </Stack>
-                  <Collapse in={expanded} timeout="auto" unmountOnExit>
-                    <Box className={styles.indent}>{renderOrderedFieldingRows(g.percentiles)}</Box>
-                  </Collapse>
-                </Box>
+                <PercentileCollapsibleSection
+                  key={g.position_key}
+                  title={g.label}
+                  open={expanded}
+                  onToggle={() => setFieldingPosOpen((o) => ({ ...o, [g.position_key]: !expanded }))}
+                  ariaLabelExpanded={`Hide ${g.label} percentile rows`}
+                  ariaLabelCollapsed={`Show ${g.label} percentile rows`}
+                >
+                  {renderOrderedFieldingRows(g.percentiles)}
+                </PercentileCollapsibleSection>
               );
             })}
             {!totalHasRows && !hasPerPosition && (
@@ -893,27 +956,15 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
         {hasCatchingValue && catching != null && (
           <>
             <Divider className={styles.sectionDivider} />
-            <Box className={styles.pitchTypeBlock}>
-              <Stack direction="row" alignItems="center" spacing={0.25} className={styles.pitchTypeHeader}>
-                <IconButton
-                  size="small"
-                  aria-expanded={catchingValueOpen}
-                  aria-label={
-                    catchingValueOpen ? 'Hide Catching value percentile rows' : 'Show Catching value percentile rows'
-                  }
-                  onClick={() => setCatchingValueOpen((o) => !o)}
-                  className={styles.iconTight}
-                >
-                  {catchingValueOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
-                </IconButton>
-                <Typography variant="caption" className={styles.pitchTypeLabel}>
-                  Catching value
-                </Typography>
-              </Stack>
-              <Collapse in={catchingValueOpen} timeout="auto" unmountOnExit>
-                <Box className={styles.indent}>{renderOrderedRows(catchingIds, catching)}</Box>
-              </Collapse>
-            </Box>
+            <PercentileCollapsibleSection
+              title="Catching value"
+              open={catchingValueOpen}
+              onToggle={() => setCatchingValueOpen((o) => !o)}
+              ariaLabelExpanded="Hide Catching value percentile rows"
+              ariaLabelCollapsed="Show Catching value percentile rows"
+            >
+              {renderOrderedRows(catchingIds, catching)}
+            </PercentileCollapsibleSection>
           </>
         )}
         {run && SAVANT_RUNNING_ORDER.some((id) => run[id]) && (

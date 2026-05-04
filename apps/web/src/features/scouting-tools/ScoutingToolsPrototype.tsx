@@ -1,5 +1,10 @@
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
 import Skeleton from '@mui/material/Skeleton';
 import Stack from '@mui/material/Stack';
 import Table from '@mui/material/Table';
@@ -17,6 +22,7 @@ import {
   fieldingScoutingLines,
   mergeSlotsForScouting,
   pitchingScoutingLines,
+  type ScoutingGradeBreakdown,
   type ScoutingToolLine,
 } from '@/features/scouting-tools/scoutingToolsFromPercentiles.js';
 import styles from './ScoutingToolsPrototype.module.css';
@@ -51,18 +57,123 @@ function formatGrade(v: number | null): string {
 
 const TOOLTIP_SX = { maxWidth: 440 };
 
+function GradeBreakdownDialog({
+  open,
+  onClose,
+  title,
+  breakdown,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  breakdown: ScoutingGradeBreakdown;
+}) {
+  const { formulaLines, metrics, selectionNote, meanGoodness, grade20_80 } = breakdown;
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth aria-labelledby="scouting-grade-dialog-title">
+      <DialogTitle id="scouting-grade-dialog-title">{title}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          League percentile (p) from the cohort, adjusted to a goodness scale (0–100, higher = better), averaged for
+          this cell, then mapped to a 20–80 scouting-style grade in steps of 5.
+        </Typography>
+        {selectionNote ? (
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            {selectionNote}
+          </Typography>
+        ) : null}
+        {meanGoodness != null && grade20_80 != null ? (
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            <span className={styles.gradeMono}>mean_goodness = {meanGoodness.toFixed(2)}</span>
+            {' → '}
+            <span className={styles.gradeMono}>grade = {grade20_80}</span>
+          </Typography>
+        ) : null}
+        <Typography component="h3" variant="subtitle2" sx={{ mt: 1, mb: 0.5 }}>
+          Steps
+        </Typography>
+        <Box component="ol" sx={{ m: 0, pl: 2.25, mb: 0 }}>
+          {formulaLines.map((line, i) => (
+            <Typography key={`${i}-${line.slice(0, 48)}`} component="li" variant="body2" sx={{ py: 0.2 }}>
+              {line}
+            </Typography>
+          ))}
+        </Box>
+        {metrics.length > 0 ? (
+          <>
+            <Typography component="h3" variant="subtitle2" sx={{ mt: 2, mb: 0.75 }}>
+              Inputs
+            </Typography>
+            <Table size="small" sx={{ '& .MuiTableCell-root': { py: 0.5, px: 1 } }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Metric</TableCell>
+                  <TableCell align="right">League p</TableCell>
+                  <TableCell>Dir.</TableCell>
+                  <TableCell align="right">Goodness</TableCell>
+                  <TableCell align="center">In mean</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {metrics.map((m) => (
+                  <TableRow key={m.metricId}>
+                    <TableCell>
+                      <Typography variant="body2" component="code" className={styles.metricCode}>
+                        {m.metricId}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      {m.leaguePercentile != null && Number.isFinite(m.leaguePercentile)
+                        ? `${Math.round(m.leaguePercentile)}`
+                        : '—'}
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="caption" color="text.secondary">
+                        {m.direction === 'lower_better' ? 'low+ good' : 'high+ good'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      {m.goodnessPercentile != null && Number.isFinite(m.goodnessPercentile)
+                        ? m.goodnessPercentile.toFixed(1)
+                        : '—'}
+                    </TableCell>
+                    <TableCell align="center">{m.used ? 'Yes' : '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </>
+        ) : null}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} variant="contained" size="small">
+          Close
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function GradeCell({
   value,
   note,
   explainer,
+  toolLabel,
+  columnLabel,
+  breakdown,
+  onOpenDetail,
 }: {
   value: number | null;
   note?: string;
   explainer: string;
+  toolLabel: string;
+  columnLabel: string;
+  breakdown: ScoutingGradeBreakdown;
+  onOpenDetail: (payload: { title: string; breakdown: ScoutingGradeBreakdown }) => void;
 }) {
   const display = formatGrade(value);
   const placeholder = value == null && note != null ? `\n\n${note} when wired.` : '';
-  const tip = `${explainer || '—'}${placeholder}`;
+  const tip = `${explainer || '—'}${placeholder}\n\n(Click for calculation.)`;
 
   const body =
     value == null && note != null ? (
@@ -82,7 +193,32 @@ function GradeCell({
   return (
     <TableCell align="center" className={styles.gradeCell}>
       <Tooltip title={tip} placement="top" enterDelay={400} slotProps={{ tooltip: { sx: TOOLTIP_SX } }}>
-        <span className={styles.tooltipHit}>{body}</span>
+        <Box
+          component="button"
+          type="button"
+          onClick={() => onOpenDetail({ title: `${toolLabel} · ${columnLabel}`, breakdown })}
+          aria-label={`Show calculation for ${toolLabel} ${columnLabel}`}
+          sx={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            minHeight: 32,
+            px: 0.75,
+            py: 0.25,
+            m: 0,
+            border: 'none',
+            borderRadius: 1,
+            bgcolor: 'transparent',
+            font: 'inherit',
+            color: 'inherit',
+            cursor: 'pointer',
+            textAlign: 'center',
+            '&:hover': { bgcolor: 'action.hover' },
+          }}
+        >
+          {body}
+        </Box>
       </Tooltip>
     </TableCell>
   );
@@ -102,7 +238,10 @@ function ScoutingTable({
   /** Pitching uses one grade column (no separate result tier in prototype). */
   showResultColumn?: boolean;
 }) {
+  const [detail, setDetail] = useState<{ title: string; breakdown: ScoutingGradeBreakdown } | null>(null);
+  const processColLabel = showResultColumn ? 'Process' : 'Grade';
   return (
+    <>
     <Table size="small" className={styles.table}>
       <TableHead>
         <TableRow>
@@ -152,14 +291,39 @@ function ScoutingTable({
                 <span className={styles.toolLabel}>{row.label}</span>
               </Tooltip>
             </TableCell>
-            <GradeCell value={row.process} note={row.processNote} explainer={row.processTooltip} />
+            <GradeCell
+              value={row.process}
+              note={row.processNote}
+              explainer={row.processTooltip}
+              toolLabel={row.label}
+              columnLabel={processColLabel}
+              breakdown={row.processBreakdown}
+              onOpenDetail={setDetail}
+            />
             {showResultColumn && (
-              <GradeCell value={row.result} note={row.resultNote} explainer={row.resultTooltip || '—'} />
+              <GradeCell
+                value={row.result}
+                note={row.resultNote}
+                explainer={row.resultTooltip || '—'}
+                toolLabel={row.label}
+                columnLabel="Result"
+                breakdown={row.resultBreakdown}
+                onOpenDetail={setDetail}
+              />
             )}
           </TableRow>
         ))}
       </TableBody>
     </Table>
+    {detail ? (
+      <GradeBreakdownDialog
+        open
+        onClose={() => setDetail(null)}
+        title={detail.title}
+        breakdown={detail.breakdown}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -167,11 +331,13 @@ function Section({
   title,
   data,
   linesFn,
+  season,
   showResultColumn = true,
 }: {
   title: string;
   data: LeaguePercentilesResponse | null;
-  linesFn: (slots: Record<string, PercentileSlot>) => ScoutingToolLine[];
+  linesFn: (slots: Record<string, PercentileSlot>, season: number) => ScoutingToolLine[];
+  season: number;
   showResultColumn?: boolean;
 }) {
   if (!data?.percentiles_available) {
@@ -182,7 +348,7 @@ function Section({
     );
   }
   const slots = mergeSlotsForScouting(data);
-  const lines = linesFn(slots);
+  const lines = linesFn(slots, season);
   return (
     <>
       <Typography variant="caption" className={styles.sectionTitle}>
@@ -249,17 +415,28 @@ export function ScoutingToolsPrototype({ playerId, season, cardRole }: Props) {
     <Box className={styles.root}>
       <Typography variant="caption" color="text.secondary" className={styles.blurb}>
         {cardRole === 'pitching'
-          ? '20–80 grades (nearest 5): one tier per tool; Overall blends xERA + xFIP.'
-          : '20–80 style grades from league percentiles (nearest 5). Prototype weights — see docs/plan.'}
+          ? '20–80 grades (nearest 5): era-based rows (pre-2002: three tools; 2002+: Stuff, Command, Control, Limit damage, Overall).'
+          : '20–80 style grades from league percentiles (nearest 5). Prototype weights — see docs/plan.'}{' '}
+        Click any grade to open the formula and per-metric inputs.
       </Typography>
 
-      {cardRole === 'batting' && <Section title="Batting" data={primary} linesFn={battingScoutingLines} />}
-
-      {cardRole === 'pitching' && (
-        <Section title="Pitching" data={primary} linesFn={pitchingScoutingLines} showResultColumn={false} />
+      {cardRole === 'batting' && (
+        <Section title="Batting" data={primary} season={season} linesFn={battingScoutingLines} />
       )}
 
-      {cardRole === 'fielding' && <Section title="Fielding" data={primary} linesFn={fieldingScoutingLines} />}
+      {cardRole === 'pitching' && (
+        <Section
+          title="Pitching"
+          data={primary}
+          season={season}
+          linesFn={pitchingScoutingLines}
+          showResultColumn={false}
+        />
+      )}
+
+      {cardRole === 'fielding' && (
+        <Section title="Fielding" data={primary} season={season} linesFn={fieldingScoutingLines} />
+      )}
     </Box>
   );
 }

@@ -1,10 +1,6 @@
 import type pg from 'pg';
-import {
-  getFgBattingCardPayload,
-  getFgPitchingCardPayload,
-  pitcherJawsCohortRoleKey,
-  playerFgPredicate,
-} from './fangraphsCareer.js';
+import { getFgBattingCardPayload, getFgPitchingCardPayload, pitcherJawsCohortRoleKey } from './fangraphsCareer.js';
+import { playerFgPredicateConsolidated } from './fangraphsFielding.js';
 import { JAWS_BATTER_PRIMARY_POSITION_SCOPED_SQL } from './jawsBattingPrimaryPositionScoped.sql.js';
 
 export const JAWS_EXPANDED_SPEC_VERSION = '2026.7';
@@ -213,7 +209,7 @@ async function hofTableExists(pool: pg.Pool): Promise<boolean> {
 
 /** When matviews omit a row (e.g. pre-V29 peak join), derive SP/RP/SP_RP from career GS/G only. */
 async function resolvePitcherJawsRoleFromCareer(pool: pg.Pool, playerId: number): Promise<string | null> {
-  const pred = playerFgPredicate('c');
+  const pred = playerFgPredicateConsolidated('c', 'pitching');
   const { rows } = await pool.query(
     `SELECT c.career_games, c.career_games_started FROM fg_pitching_career_mlb c WHERE ${pred} LIMIT 1`,
     [playerId]

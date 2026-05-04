@@ -8,7 +8,7 @@ import {
 import { inferTwoPlayerCompareFromUserMessage } from '../lib/compareUserIntent.js';
 import { inferStatcastHostInject } from '../lib/statcastChatIntent.js';
 import { narrowCandidatesByGenerationalHint } from '../lib/playerNameQuery.js';
-import { getPlayerById, resolvePlayer } from '../repos/players.js';
+import { getPlayerById, NAME_QUERY_CANDIDATE_LIMIT, resolvePlayer } from '../repos/players.js';
 import {
   clipForChatLog,
   logOllamaPerformanceMetrics,
@@ -439,7 +439,7 @@ async function maybeServerDrivenResolveByNameAtStart(
   const nameQ = inferPlayerNameQueryFromUserMessage(userMessage);
   if (!nameQ) return;
 
-  const raw = await resolvePlayer(pool, { name_query: nameQ, limit: 8 });
+  const raw = await resolvePlayer(pool, { name_query: nameQ, limit: NAME_QUERY_CANDIDATE_LIMIT });
   let candidates = (raw.candidates as Record<string, unknown>[]) ?? [];
   candidates = narrowCandidatesByGenerationalHint(nameQ, candidates);
   const resolveResult = { ...raw, candidates };
@@ -718,7 +718,7 @@ async function maybeServerDrivenStatcastInject(
   if (transcriptHasStatcastPitchOrBatterTool(messages)) return;
   if (transcriptHasResolvePlayer(messages)) return;
 
-  const raw = await resolvePlayer(pool, { name_query: spec.name_query, limit: 8 });
+  const raw = await resolvePlayer(pool, { name_query: spec.name_query, limit: NAME_QUERY_CANDIDATE_LIMIT });
   let cands = (raw.candidates as Record<string, unknown>[]) ?? [];
   cands = narrowCandidatesByGenerationalHint(spec.name_query, cands);
   const resolveResult = { ...raw, candidates: cands };

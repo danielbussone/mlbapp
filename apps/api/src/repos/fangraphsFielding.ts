@@ -1,7 +1,7 @@
 import type pg from 'pg';
 import { rowsToJson } from './rowJson.js';
 
-/** Match FG rows to dim_player by surrogate id or fangraphs external id (`$1` = dim `player_id`). */
+/** Match FG season rows to ``dim_player`` by ``player_id`` or ``player_external_identifier`` (fangraphs). */
 export function playerFgPredicate(alias: string): string {
   return `(
     ${alias}.player_id = $1
@@ -10,6 +10,14 @@ export function playerFgPredicate(alias: string): string {
       WHERE m.player_id = $1 AND m.id_system = 'fangraphs' AND m.id_value = ${alias}.id_fg::text
     )
   )`;
+}
+
+/**
+ * Same as ``playerFgPredicate`` for relations without ``stats_jsonb`` (consolidated MVs / career views).
+ * ``role`` is kept for call-site clarity (batting vs pitching); SQL is identical.
+ */
+export function playerFgPredicateConsolidated(alias: string, _role: 'batting' | 'pitching'): string {
+  return playerFgPredicate(alias);
 }
 
 export type FgFieldingQuery = {

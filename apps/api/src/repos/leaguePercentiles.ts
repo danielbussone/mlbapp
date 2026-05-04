@@ -8,10 +8,15 @@ import { rowsToJson } from './rowJson.js';
 import { buildPercentileSlot } from './leaguePercentilesPayload.js';
 import { directionForMetric } from './leaguePercentilesMetricDirection.js';
 import { playerFgPredicate } from './fangraphsFielding.js';
-import { fetchSavantFgBattingSeason, fetchSavantFgPitchingSeason } from './leaguePercentilesFgSavant.js';
+import {
+  fetchFgPitchTypePlusSlots,
+  fetchSavantFgBattingSeason,
+  fetchSavantFgPitchingSeason,
+} from './leaguePercentilesFgSavant.js';
 import { fetchBatterSavantBipExtras, fetchPitcherSavantBipExtras } from './leaguePercentilesSavantBip.js';
 import { fetchSavantRunning } from './leaguePercentilesRunning.js';
 import {
+  cohortPeerFloorForQualifiedMin,
   fetchMaxMlbPlayerGamesForSeason,
   PITCH_TYPE_NON_PROVISIONAL_TYPE_PITCHES,
   prorateCountForSeason,
@@ -25,7 +30,21 @@ import {
   enrichPitchTypeMvHypotheticals,
 } from './leaguePercentilesMidrankMv.js';
 
-export const LEAGUE_PERCENTILES_COHORT_SPEC_VERSION = '2026.21';
+export const LEAGUE_PERCENTILES_COHORT_SPEC_VERSION = '2026.28';
+
+/**
+ * Bounds for GET /players/:id/league-percentiles `game_year`.
+ * Do not use `clampGameYear` from `statcast.ts` here: that floor matches Statcast tables (2010+),
+ * but FanGraphs season percentiles must use the requested MLB season (e.g. 1997, 2008).
+ */
+const LEAGUE_PERCENTILES_GAME_YEAR_MIN = 1876;
+const LEAGUE_PERCENTILES_GAME_YEAR_MAX = 2100;
+
+export function clampLeaguePercentilesGameYear(y: number): number {
+  const t = Math.trunc(Number(y));
+  if (!Number.isFinite(t)) return LEAGUE_PERCENTILES_GAME_YEAR_MIN;
+  return Math.min(Math.max(t, LEAGUE_PERCENTILES_GAME_YEAR_MIN), LEAGUE_PERCENTILES_GAME_YEAR_MAX);
+}
 
 function num(v: unknown): number | null {
   if (v == null) return null;
@@ -767,11 +786,13 @@ export async function fetchPitcherLeaguePercentiles(
     [input.game_year, input.pitcher_mlbam]
   );
   const byPitch: Record<string, Record<string, PercentileSlot>> = {};
+  const pitchesByType: Record<string, number> = {};
   for (const raw of rowsToJson(ptRows as Record<string, unknown>[])) {
     const r = raw as Record<string, unknown>;
     const pt = String(r.pitch_type ?? '').trim();
     if (!pt) continue;
     const pc = int(r.pitches) ?? 0;
+    pitchesByType[pt] = pc;
     /** Prorated full-season floor, or enough type pitches that we treat the row as non-provisional. */
     const pitchTypeQualified =
       pc >= tPitchType || pc >= PITCH_TYPE_NON_PROVISIONAL_TYPE_PITCHES;
@@ -881,6 +902,31 @@ export async function fetchPitcherLeaguePercentiles(
     });
   }
 
+  if (Object.keys(byPitch).length > 0) {
+    await tryOptionalRelation(async () => {
+      const cohortTbfPeer = cohortPeerFloorForQualifiedMin(minTbfFg);
+      const pitchTypePeerFloor = cohortPeerFloorForQualifiedMin(tPitchType);
+      const { rows: fgTbfRows } = await pool.query(
+        `SELECT tbf FROM fg_pitching_season_mlb_merged_stats WHERE player_id = $1 AND season = $2 LIMIT 1`,
+        [input.player_id, input.game_year]
+      );
+      const qualPitFg = (int(fgTbfRows[0]?.tbf) ?? 0) >= minTbfFg;
+      const fgPtSlots = await fetchFgPitchTypePlusSlots(pool, {
+        season: input.game_year,
+        player_id: input.player_id,
+        pitchTypes: Object.keys(byPitch),
+        cohortTbfPeerFloor: cohortTbfPeer,
+        qualPitOverall: qualPitFg,
+        pitchesByType,
+        pitchTypePeerFloor,
+      });
+      for (const [pt, extra] of Object.entries(fgPtSlots)) {
+        const base = byPitch[pt];
+        if (base) byPitch[pt] = { ...base, ...extra };
+      }
+    });
+  }
+
   const fgSavant =
     (await tryOptionalRelation(() =>
       fetchSavantFgPitchingSeason(pool, {
@@ -918,7 +964,7 @@ export async function fetchPitcherLeaguePercentiles(
     role: 'pitcher',
     cohort_notes: [
       'MLB Statcast',
-      'FanGraphs season (WAR FIP, WAR RA9, xERA, xFIP, K%, BB%)',
+      'FanGraphs season (WAR FIP, WAR RA9, xERA, xFIP, K%, BB%; plate discipline 2002+ from stats_jsonb / typed vfa babip gb hr_fb; season Stuff+/Location+/Pitching+ when FG publishes sp_stuff/sp_location/sp_pitching; per-type sp_s/sp_l/sp_p when present)',
       'pitch-type cohort: (game_year, pitch_type)',
       'docs/COHORT_PERCENTILES_SPEC.md',
     ],

@@ -16,6 +16,7 @@ import {
   formatCareerDisambiguationHint,
   getFgCareerHintsForPlayerIds,
   getPlayerById,
+  NAME_QUERY_CANDIDATE_LIMIT,
   resolvePlayer,
   resolvePlayerIdFromQuery,
 } from '../repos/players.js';
@@ -36,7 +37,10 @@ import {
   statcastSummaryHasRenderableData,
 } from '../repos/statcast.js';
 import { statcastFieldingOaaCells } from '../repos/statcastFielding.js';
-import { getLeaguePercentilesForPlayer } from '../repos/leaguePercentiles.js';
+import {
+  clampLeaguePercentilesGameYear,
+  getLeaguePercentilesForPlayer,
+} from '../repos/leaguePercentiles.js';
 import { getJawsExpanded } from '../repos/jawsExpanded.js';
 
 const fgSeasonQuerySchema = z.object({
@@ -197,7 +201,10 @@ export function registerPlayersRoutes(app: FastifyInstance) {
       if ('error' in resolved) {
         const ambiguous = resolved.error.startsWith('Ambiguous player query');
         if (ambiguous) {
-          const raw = await resolvePlayer(pool, { name_query: parsed.data.name_query, limit: 8 });
+          const raw = await resolvePlayer(pool, {
+            name_query: parsed.data.name_query,
+            limit: NAME_QUERY_CANDIDATE_LIMIT,
+          });
           let candidates = (raw.candidates as Record<string, unknown>[]) ?? [];
           candidates = narrowCandidatesByGenerationalHint(parsed.data.name_query, candidates);
           const pids = candidates
@@ -205,12 +212,15 @@ export function registerPlayersRoutes(app: FastifyInstance) {
             .filter((id) => Number.isFinite(id) && id > 0);
           const hints = await getFgCareerHintsForPlayerIds(pool, pids);
           const hintBy = new Map(hints.map((h) => [h.player_id, h]));
-          const withHints = candidates.map((c) => {
-            const pid = Number(c.player_id);
-            const h = hintBy.get(pid);
-            const career_hint = h ? formatCareerDisambiguationHint(h) : 'No FanGraphs MLB seasons on file';
-            return { ...c, career_hint };
-          });
+          const withHints = candidates
+            .map((c) => {
+              const pid = Number(c.player_id);
+              const h = hintBy.get(pid);
+              const career_fwar = h != null ? h.career_fwar : 0;
+              const career_hint = h ? formatCareerDisambiguationHint(h) : 'No FanGraphs MLB seasons on file';
+              return { ...c, career_hint, career_fwar };
+            })
+            .sort((a, b) => Number(b.career_fwar) - Number(a.career_fwar));
           reply.code(409).send({ error: resolved.error, candidates: withHints });
           return;
         }
@@ -774,7 +784,7 @@ export function registerPlayersRoutes(app: FastifyInstance) {
         reply.code(404).send({ error: 'Player not found' });
         return;
       }
-      const gy = clampGameYear(parsed.data.game_year);
+      const gy = clampLeaguePercentilesGameYear(parsed.data.game_year);
       const mlbam = player.key_mlbam;
       const payload = await getLeaguePercentilesForPlayer(pool, {
         player_id: playerId,

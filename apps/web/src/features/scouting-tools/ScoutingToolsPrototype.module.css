@@ -52,3 +52,8 @@
   min-width: 2.5rem;
   cursor: help;
 }
+
+.metricCode {
+  font-size: 0.75rem;
+  word-break: break-word;
+}

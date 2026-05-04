@@ -16,6 +16,7 @@ export const STATCAST_BAT_TRACKING_JSON_KEYS = {
 const MAX_SAMPLE_PITCHER = 200;
 /** Batter spray / batted-ball pulls can be much larger (all chartable BIP with hc_x/hc_y). */
 const MAX_SAMPLE_BATTER = 12_000;
+/** Statcast `statcast_pitch` / related tables: do not use this floor for FanGraphs-only routes (e.g. league percentiles). */
 const MIN_YEAR = 2010;
 const MAX_YEAR = 2026;
 
@@ -23,7 +24,7 @@ function clampYear(y: number): number {
   return Math.min(Math.max(y, MIN_YEAR), MAX_YEAR);
 }
 
-/** Clamped game year for Statcast queries (routes use this name). */
+/** Clamped game year for Statcast SQL only. League percentiles use `clampLeaguePercentilesGameYear` in `leaguePercentiles.ts`. */
 export function clampGameYear(y: number): number {
   return clampYear(y);
 }

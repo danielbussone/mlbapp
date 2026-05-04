@@ -1260,9 +1260,7 @@ export function PlayerCardPanel({
                         fieldingRowsReady={!fieldingHistoryLoading}
                       />
                     </StatcastCollapsibleSection>
-                    <StatcastCollapsibleSection title="League percentiles">
-                      <LeaguePercentilesPanel playerId={playerId} season={season} cardRole="fielding" />
-                    </StatcastCollapsibleSection>
+                    <LeaguePercentilesPanel playerId={playerId} season={season} cardRole="fielding" />
                   </Stack>
                 ) : fetchingSc ? (
                   <Stack spacing={1.25} sx={{ mt: 0.5 }} aria-busy="true" aria-label="Loading Statcast">
@@ -1279,6 +1277,14 @@ export function PlayerCardPanel({
                       <Alert severity="info" className={styles.alertDense}>
                         {String(statcast.reason ?? 'Statcast unavailable')}
                       </Alert>
+                    )}
+                    {(role === 'batting' || role === 'pitching') && (
+                      <LeaguePercentilesPanel
+                        playerId={playerId}
+                        season={season}
+                        cardRole={role === 'pitching' ? 'pitching' : 'batting'}
+                        pitchTypes={pitchingMixDisplay.map((r) => String(r.pitch_type ?? ''))}
+                      />
                     )}
                     {statcast && statcastAvailable && role === 'pitching' && (
                       <Stack spacing={1}>
@@ -1364,14 +1370,6 @@ export function PlayerCardPanel({
                             />
                           </StatcastCollapsibleSection>
                         )}
-                        <StatcastCollapsibleSection title="League percentiles">
-                          <LeaguePercentilesPanel
-                            playerId={playerId}
-                            season={season}
-                            cardRole="pitching"
-                            pitchTypes={pitchingMixDisplay.map((r) => String(r.pitch_type ?? ''))}
-                          />
-                        </StatcastCollapsibleSection>
                       </Stack>
                     )}
                     {statcast && statcastAvailable && role === 'batting' && (
@@ -1404,9 +1402,6 @@ export function PlayerCardPanel({
                             <SprayChart rows={statcast.sample} gameYear={season} />
                           </StatcastCollapsibleSection>
                         )}
-                        <StatcastCollapsibleSection title="League percentiles">
-                          <LeaguePercentilesPanel playerId={playerId} season={season} cardRole="batting" />
-                        </StatcastCollapsibleSection>
                       </Stack>
                     )}
                   </>
