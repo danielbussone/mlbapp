@@ -9,10 +9,16 @@ import Paper from '@mui/material/Paper';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { healthResponseSchema } from '@mlbapp/shared';
+import { Link, useNavigate } from 'react-router-dom';
+import {
+  healthResponseSchema,
+  leaderboardEventDataSchema,
+  thinkingEventDataSchema,
+  type LeaderboardAttachment,
+} from '@mlbapp/shared';
 import { getDefaultCardSeasonYear } from '@/lib/cardSeasonYear.js';
 import { extractCompareChatIntent, extractPlayerCardChatIntent } from '@/lib/chatPlayerQuery.js';
+import { ChatLeaderboardPanel } from '@/features/leaderboard/ChatLeaderboardPanel.js';
 import { PlayerCardPanel } from '@/features/player-card/PlayerCardPanel.js';
 import { PlayerCompareSidebar } from '@/features/compare/PlayerCompareSidebar.js';
 import { consumeSse } from '@/lib/sse.js';
@@ -23,6 +29,8 @@ type ChatRole = 'user' | 'assistant';
 interface ChatLine {
   role: ChatRole;
   text: string;
+  /** Ollama `message.thinking` when OLLAMA_THINK is enabled (may span multiple SSE chunks). */
+  thinking?: string;
 }
 
 type NamedPlayerCandidate = {
@@ -48,6 +56,7 @@ function parseNamedResponse(j: unknown): Record<string, unknown> {
 }
 
 export function App() {
+  const navigate = useNavigate();
   const [apiOk, setApiOk] = useState<boolean | null>(null);
   const [input, setInput] = useState('');
   const [lines, setLines] = useState<ChatLine[]>([]);
@@ -65,6 +74,7 @@ export function App() {
   const [compareYear, setCompareYear] = useState(() => getDefaultCardSeasonYear());
   /** When set with career compare, sidebar loads FanGraphs rows for this season only. */
   const [compareFgSeason, setCompareFgSeason] = useState<number | null>(null);
+  const [leaderboardAttachment, setLeaderboardAttachment] = useState<LeaderboardAttachment | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -193,9 +203,11 @@ export function App() {
       }
     }
 
+    setLeaderboardAttachment(null);
     setLines((prev) => [...prev, { role: 'user', text: msg }]);
     setStreaming(true);
     let assistant = '';
+    let thinkingAccum = '';
 
     setLines((prev) => [...prev, { role: 'assistant', text: '' }]);
 
@@ -225,9 +237,32 @@ export function App() {
           setLines((prev) => {
             const next = [...prev];
             const last = next[next.length - 1];
-            if (last?.role === 'assistant') next[next.length - 1] = { role: 'assistant', text: assistant };
+            if (last?.role === 'assistant')
+              next[next.length - 1] = {
+                role: 'assistant',
+                text: assistant,
+                ...(thinkingAccum ? { thinking: thinkingAccum } : {}),
+              };
             return next;
           });
+        } else if (event === 'thinking') {
+          const parsed = thinkingEventDataSchema.safeParse(data);
+          if (!parsed.success) return;
+          thinkingAccum += (thinkingAccum ? '\n\n---\n\n' : '') + parsed.data.text;
+          setLines((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === 'assistant')
+              next[next.length - 1] = {
+                role: 'assistant',
+                text: assistant,
+                thinking: thinkingAccum,
+              };
+            return next;
+          });
+        } else if (event === 'leaderboard') {
+          const p = leaderboardEventDataSchema.safeParse(data);
+          if (p.success) setLeaderboardAttachment(p.data);
         } else if (event === 'error' && data && typeof data === 'object' && 'message' in data) {
           setError(String((data as { message: string }).message));
         }
@@ -245,7 +280,9 @@ export function App() {
 
   return (
     <Container
-      maxWidth={sidebarPlayerId != null || compareIds != null ? false : 'md'}
+      maxWidth={
+        sidebarPlayerId != null || compareIds != null || leaderboardAttachment != null ? false : 'md'
+      }
       className={styles.container}
     >
       <Typography variant="h4" component="h1" gutterBottom className={styles.title}>
@@ -253,8 +290,8 @@ export function App() {
       </Typography>
       <Typography variant="body2" color="text.secondary" className={styles.intro}>
         Local baseball chat — SSE streaming from first boot. Start Postgres + Ollama with{' '}
-        <code>docker compose up -d db ollama</code>, pull a model, then chat. Type a player name, “Tell me about …”,
-        “Talk about …”, or “Who is …” to open the player card beside the thread.
+        <code>docker compose up -d db ollama</code>, pull a model, then chat.         Type a player name, “Tell me about …”,
+        “Talk about …”, or “Who is …” to open the player card on the right; ranking tables from chat appear there too.
         {import.meta.env.DEV && (
           <>
             {' '}
@@ -338,6 +375,14 @@ export function App() {
                   <Typography variant="caption" color="text.secondary">
                     {line.role === 'user' ? 'You' : 'Assistant'}
                   </Typography>
+                  {line.role === 'assistant' && line.thinking ? (
+                    <details className={styles.thinkingDetails}>
+                      <summary className={styles.thinkingSummary}>
+                        Reasoning trace (model internals — can be long; thinking models may take minutes)
+                      </summary>
+                      <pre className={styles.thinkingPre}>{line.thinking}</pre>
+                    </details>
+                  ) : null}
                   <Typography variant="body1" className={styles.messageBody}>
                     {line.text || (streaming && i === lines.length - 1 ? '…' : '')}
                   </Typography>
@@ -379,35 +424,47 @@ export function App() {
           </Typography>
         </Box>
 
-        {compareIds != null && (
+        {(compareIds != null ||
+          sidebarPlayerId != null ||
+          leaderboardAttachment != null) && (
           <Box className={styles.sidebarColumn}>
-            <PlayerCompareSidebar
-              playerIds={compareIds}
-              mode={compareMode}
-              gameYear={compareYear}
-              compareFgSeason={compareFgSeason}
-              onClose={() => {
-                setCompareIds(null);
-                setCompareFgSeason(null);
-                setSidebarResolveError(null);
-              }}
-            />
-          </Box>
-        )}
-        {sidebarPlayerId != null && compareIds == null && (
-          <Box className={styles.sidebarColumn}>
-            <PlayerCardPanel
-              key={sidebarPlayerId}
-              playerId={sidebarPlayerId}
-              variant="sidebar"
-              defaultSeason={defaultCardSeason}
-              autoFallbackLatestSeasonIfEmpty={sidebarExplicitSeason == null}
-              onClose={() => {
-                setSidebarPlayerId(null);
-                setSidebarExplicitSeason(null);
-                setSidebarResolveError(null);
-              }}
-            />
+            {compareIds != null && (
+              <PlayerCompareSidebar
+                playerIds={compareIds}
+                mode={compareMode}
+                gameYear={compareYear}
+                compareFgSeason={compareFgSeason}
+                onClose={() => {
+                  setCompareIds(null);
+                  setCompareFgSeason(null);
+                  setSidebarResolveError(null);
+                }}
+              />
+            )}
+            {sidebarPlayerId != null && compareIds == null && (
+              <PlayerCardPanel
+                key={sidebarPlayerId}
+                playerId={sidebarPlayerId}
+                variant="sidebar"
+                defaultSeason={defaultCardSeason}
+                autoFallbackLatestSeasonIfEmpty={sidebarExplicitSeason == null}
+                onClose={() => {
+                  setSidebarPlayerId(null);
+                  setSidebarExplicitSeason(null);
+                  setSidebarResolveError(null);
+                }}
+              />
+            )}
+            {leaderboardAttachment != null && (
+              <ChatLeaderboardPanel
+                variant="sidebar"
+                attachment={leaderboardAttachment}
+                onExpand={() =>
+                  navigate('/leaderboards', { state: { leaderboard: leaderboardAttachment } })
+                }
+                onDismiss={() => setLeaderboardAttachment(null)}
+              />
+            )}
           </Box>
         )}
       </Box>

@@ -29,7 +29,7 @@ export async function fetchStatcastTimeseries(
   const r = await fetch(`/api/players/${playerId}/statcast-timeseries?${q}`);
   const j = (await r.json()) as { rows?: unknown[]; error?: string };
   if (!r.ok) {
-    throw new HttpError(String(j.error ?? r.statusText || 'Request failed'), r.status);
+    throw new HttpError(String(j.error ?? (r.statusText || 'Request failed')), r.status);
   }
   return Array.isArray(j.rows) ? j.rows : [];
 }

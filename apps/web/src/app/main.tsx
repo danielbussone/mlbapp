@@ -34,6 +34,9 @@ const PlayerCareerTrendsPage = lazy(() =>
 const PlayerPitchMixSupplementPage = lazy(() =>
   import('@/pages/PlayerPitchMixSupplementPage.js').then((m) => ({ default: m.PlayerPitchMixSupplementPage })),
 );
+const LeaderboardPage = lazy(() =>
+  import('@/pages/LeaderboardPage.js').then((m) => ({ default: m.LeaderboardPage })),
+);
 const FrvBreakdownPrototype = lazy(() =>
   import('@/features/fielding-frv/FrvBreakdownPrototype.js').then((m) => ({ default: m.FrvBreakdownPrototype })),
 );
@@ -75,6 +78,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="/players/:playerId" element={<PlayerCardPage />} />
                 <Route path="/compare/career" element={<CompareCareerPage />} />
                 <Route path="/compare/statcast" element={<CompareStatcastPage />} />
+                <Route path="/leaderboards" element={<LeaderboardPage />} />
                 <Route path="/" element={<App />} />
               </Routes>
             </Suspense>

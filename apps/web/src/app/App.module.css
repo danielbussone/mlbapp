@@ -69,6 +69,28 @@
   white-space: pre-wrap;
 }
 
+.thinkingDetails {
+  margin-bottom: var(--mui-spacing-1, 8px);
+  padding: var(--mui-spacing-1, 8px);
+  border-radius: 4px;
+  background-color: var(--mui-palette-grey-100, #f5f5f5);
+}
+
+.thinkingSummary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.75rem;
+  color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+}
+
+.thinkingPre {
+  margin: var(--mui-spacing-1, 8px) 0 0;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
 .streamingProgress {
   margin-top: var(--mui-spacing-1, 8px);
 }
@@ -94,6 +116,9 @@
   min-width: 0;
   width: 100%;
   align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mui-spacing-2, 16px);
 }
 
 @media (min-width: 1200px) {

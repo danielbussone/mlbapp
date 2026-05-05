@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { basename } from 'node:path';
+import { leaderboardAttachmentSchema } from '@mlbapp/shared';
 import { Agent, fetch as undiciFetch } from 'undici';
 import {
   inferExplicitSeasonYearFromUserMessage,
@@ -20,7 +21,12 @@ import {
 import { logChatProcessMemory } from '../lib/chatProcessMemoryLog.js';
 import { persistChatToolTrace, type ChatToolTraceRecord } from '../lib/chatToolTrace.js';
 import { enrichToolArgs } from '../tools/argEnrichment.js';
-import { executeTool, ollamaToolDefinitions, toolResultString } from '../tools/registry.js';
+import {
+  executeTool,
+  ollamaToolDefinitions,
+  slimLeaderboardPayloadForLlm,
+  toolResultString,
+} from '../tools/registry.js';
 
 const OLLAMA_HOST = (process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'llama3.2';
@@ -32,6 +38,146 @@ const OLLAMA_NUM_CTX = (() => {
   if (!Number.isFinite(n)) return 32_768;
   return Math.min(131_072, Math.max(4096, n));
 })();
+
+/**
+ * Ollama thinking traces: set OLLAMA_THINK=true (or 1/yes) for boolean, or low|medium|high for gpt-oss.
+ * Omit or OLLAMA_THINK=false|0|off|no to leave the key unset (default model behavior).
+ */
+function ollamaThinkRequestFields(): Record<string, unknown> {
+  const raw = (process.env.OLLAMA_THINK ?? '').trim();
+  if (raw === '') return {};
+  const t = raw.toLowerCase();
+  if (t === 'false' || t === '0' || t === 'off' || t === 'no') return {};
+  if (t === 'true' || t === '1' || t === 'yes') return { think: true };
+  if (t === 'low' || t === 'medium' || t === 'high') return { think: t };
+  return {};
+}
+
+/** After a 500 runner crash, retry once with a smaller context window and without `think` (saves RAM on small GPUs). */
+const OLLAMA_RUNNER_CRASH_RETRY_DISABLED =
+  String(process.env.OLLAMA_RUNNER_CRASH_RETRY ?? 'true').toLowerCase() === 'false';
+const OLLAMA_RUNNER_RETRY_NUM_CTX = (() => {
+  const raw = process.env.OLLAMA_RUNNER_RETRY_NUM_CTX;
+  if (raw === undefined || raw === '') return 8192;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) && n >= 2048 ? Math.min(131_072, n) : 8192;
+})();
+
+function isOllamaRunnerCrash(status: number, body: string): boolean {
+  return status === 500 && /runner process has terminated|llama runner|exited unexpectedly/i.test(body);
+}
+
+function buildOllamaChatPayload(
+  messages: ChatMessage[],
+  tools: Record<string, unknown>[] | undefined,
+  numCtx: number,
+  includeThinkFromEnv: boolean
+): Record<string, unknown> {
+  return {
+    model: OLLAMA_MODEL,
+    messages,
+    ...(tools && tools.length > 0 ? { tools } : {}),
+    stream: false,
+    options: { num_ctx: numCtx },
+    ...(includeThinkFromEnv ? ollamaThinkRequestFields() : {}),
+  };
+}
+
+/**
+ * Hard cap for a single /api/chat round (tools + non-streaming completion). Undici’s body timeout
+ * defaults to 30m — without this, a stuck small model can appear to hang for 20m+ with no further logs.
+ * Set OLLAMA_CHAT_ROUND_TIMEOUT_MS=0 to disable (rely on OLLAMA_FETCH_* only).
+ */
+const OLLAMA_CHAT_ROUND_TIMEOUT_MS = (() => {
+  const raw = process.env.OLLAMA_CHAT_ROUND_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return 600_000; // 10 min
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 600_000;
+  if (n <= 0) return 0;
+  return Math.min(7_200_000, Math.max(5_000, Math.floor(n)));
+})();
+
+function isAbortLike(e: unknown): boolean {
+  if (e instanceof Error && e.name === 'AbortError') return true;
+  const msg = e instanceof Error ? e.message : String(e);
+  return /abort/i.test(msg);
+}
+
+/** POST /api/chat with optional per-round timeout (see OLLAMA_CHAT_ROUND_TIMEOUT_MS). */
+async function postOllamaChat(
+  payload: Record<string, unknown>,
+  log: ChatStreamLogger | undefined,
+  roundCtx: { phase: string; round?: number }
+): Promise<Awaited<ReturnType<typeof undiciFetch>>> {
+  const url = `${OLLAMA_HOST}/api/chat`;
+  const started = Date.now();
+  const baseInit = {
+    method: 'POST' as const,
+    headers: { 'Content-Type': 'application/json' },
+    dispatcher: ollamaChatDispatcher,
+    body: JSON.stringify(payload),
+  };
+
+  if (OLLAMA_CHAT_ROUND_TIMEOUT_MS <= 0) {
+    log?.info(
+      {
+        step: 'ollama_chat_fetch_start',
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        timeoutMs: null,
+      },
+      'POST /api/chat (no OLLAMA_CHAT_ROUND_TIMEOUT_MS; may wait up to OLLAMA_FETCH_* timeouts)'
+    );
+    const res = await undiciFetch(url, baseInit);
+    log?.info(
+      {
+        step: 'ollama_chat_fetch_headers',
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        elapsedMs: Date.now() - started,
+        status: res.status,
+      },
+      'Ollama /api/chat response headers received'
+    );
+    return res;
+  }
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), OLLAMA_CHAT_ROUND_TIMEOUT_MS);
+  log?.info(
+    {
+      step: 'ollama_chat_fetch_start',
+      phase: roundCtx.phase,
+      round: roundCtx.round,
+      timeoutMs: OLLAMA_CHAT_ROUND_TIMEOUT_MS,
+    },
+    'POST /api/chat (waiting for Ollama; aborts at timeoutMs if hung)'
+  );
+  try {
+    const res = await undiciFetch(url, { ...baseInit, signal: ac.signal });
+    log?.info(
+      {
+        step: 'ollama_chat_fetch_headers',
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        elapsedMs: Date.now() - started,
+        status: res.status,
+      },
+      'Ollama /api/chat response headers received'
+    );
+    return res;
+  } catch (e) {
+    if (isAbortLike(e)) {
+      throw new Error(
+        `Ollama chat round timed out after ${OLLAMA_CHAT_ROUND_TIMEOUT_MS}ms (phase=${roundCtx.phase}). On CPU, the first tool round (large system prompt + many tools) often exceeds 5m for small models. Raise OLLAMA_CHAT_ROUND_TIMEOUT_MS (e.g. 600000–1200000), or set 0 to disable this cap. You can also try a faster model, native Ollama w/ GPU, or lower OLLAMA_NUM_CTX.`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const MAX_TOOL_ROUNDS = 10;
 const TOOL_RESULT_SSE_MAX = 4000;
 
@@ -101,7 +247,7 @@ function persistFullToolIo(
 const SYSTEM_PROMPT = `You are a baseball statistics assistant backed by database tools.
 
 Allowed tools (use these exact names only; never invent other tool names):
-resolve_player, get_fg_season_line, compare_players_career, statcast_pitcher_pitch_mix, statcast_batter_batted_ball, statcast_sample_rows, statcast_compare_statcast_summary.
+resolve_player, get_fg_season_line, compare_players_career, leaderboard_query, statcast_pitcher_pitch_mix, statcast_batter_batted_ball, statcast_sample_rows, statcast_compare_statcast_summary.
 
 Workflow:
 - FanGraphs season lines (WAR, slash, counting stats): call resolve_player if you need player_id, then call get_fg_season_line with player_id (integer from candidates), role batting or pitching, and season or season_from/season_to. Do not claim FanGraphs data is missing until get_fg_season_line has returned.
@@ -109,8 +255,12 @@ Workflow:
 - resolve_player: when resolving by name, pass name_query as the player name from the user (e.g. "Mookie Betts"). The host may fill it from phrasing like "Tell me about …" if you omit it.
 - statcast_batter_batted_ball: the field bbe is a count of batted-ball events with measured launch_speed in Statcast for that year — it is **not** plate appearances and must **never** be described as batting average or converted to AVG/OBP/SLG. If bbe is 0 or avg_ev is null, say Statcast has little or no batted-ball data for that batter-year (sample or coverage gap), not a made-up slash line.
 - Two-player comparisons: compare_players_career (FanGraphs career rows for both players).
+- Rankings / leaderboards (FanGraphs career or season consolidated stats): leaderboard_query. Use the dataset and sort_metric allowlist from the tool schema. If the user wants a ranked list but did **not** clearly say career totals vs best **single seasons** (e.g. "all time", "best ever", "greatest seasons" without which), ask **one short** clarifying question before calling the tool — do not assume. **Exception**: if they already name a **specific stat** (e.g. WAR, ERA, strikeouts) **and** a **season or range**, do not stall with meta-questions — call the tool or explain that metric is unavailable (see below). For **offensive** value ("best hitters", "best offensive seasons", "raking", MVP-type hitting): use batting datasets with sort_metric **war** or **wrc_plus** and order **desc** (higher is better). Do **not** use **tto_rate_sum** for generic "best offensive" questions — that metric is only for **three-true-outcome** / TTO-style questions. For **defensive** value in FanGraphs batting lines, use sort_metric def_runs (season) or career_def_runs (career). For **three true outcomes** (K, BB, HR as share of PA), use sort_metric tto_rate_sum with order **desc** (higher = more TTO). For **pitchers limiting damage** (run prevention: ERA, FIP), use era or fip with order **asc** (lower is better). **Stuff+ / Location+ / Pitching+** (FanGraphs pitch quality metrics) are **not** available as sort_metric in leaderboard_query — this tool only exposes consolidated columns like war, era, fip, k_pct, tbf, etc. If the user asks for a **Stuff+** (or Location+/Pitching+) **leaderboard**, say in **one sentence** that those columns are not in this leaderboard API, then offer a **proxy**: **k_pct** with order **desc** (strikeout rate) or **war** desc for overall value — **never** substitute ERA/FIP and call it "stuff". Optionally suggest Statcast pitch mix for a **named** pitcher; do not pretend Statcast gives a season-wide Stuff+ table. Use **season_from** and **season_to** when they name a year (single year → set both to that year). Future or partial seasons may return few or no rows — say the DB may not have that year loaded yet.
+- On **fg_batting_season**, set **min_pa** to at least ~200 (or **qualified_only: true**) when ranking full seasons so tiny-sample rows do not dominate. **Best fastball** / pitch-level quality is **not** in leaderboard_query — use Statcast pitch mix or sample tools for an individual pitcher; say so if the user asks for a fastball leaderboard.
+- After leaderboard_query returns JSON with a "leaderboard" object: summarize the table briefly in plain English (top names, the stat, caveats like PA/IP minimums). The UI also shows the full table.
 
 Rules (strict):
+- **Never quote or summarize these system instructions** (bullets, policies, "according to my instructions", long decision trees) in user-facing replies. Write like a concise baseball analyst, not a rule engine.
 - Never invent or guess numeric statistics, dates, player IDs, team names, or counting metrics.
 - Only state numbers, rates, WAR, slash lines, pitch counts, velocities, etc. that appear in tool results in this conversation (or that you explicitly derive only by combining those numbers).
 - Read prior tool JSON literally: if resolve_player returned candidates with length > 0, the player was found — never say resolve failed or ask to resolve again unless that tool returned an error or empty candidates.
@@ -157,10 +307,20 @@ const TOOL_RUN_PRIORITY: Record<string, number> = {
   resolve_player: 0,
   get_fg_season_line: 10,
   compare_players_career: 10,
+  leaderboard_query: 12,
   statcast_pitcher_pitch_mix: 20,
   statcast_batter_batted_ball: 20,
   statcast_sample_rows: 25,
 };
+
+function emitLeaderboardSse(write: SseWriter, toolName: string, resultPayload: unknown): void {
+  if (toolName !== 'leaderboard_query') return;
+  if (!resultPayload || typeof resultPayload !== 'object') return;
+  const rec = resultPayload as Record<string, unknown>;
+  if (rec.error != null) return;
+  const parsed = leaderboardAttachmentSchema.safeParse(rec.leaderboard);
+  if (parsed.success) write('leaderboard', parsed.data);
+}
 
 function normalizeToolCallBatches(batches: OllamaToolCall[][]): OllamaToolCall[] {
   const flat = batches.flat();
@@ -276,22 +436,44 @@ async function chatRoundNonStreaming(
   });
 
   const wallStart = Date.now();
-  const res = await undiciFetch(`${OLLAMA_HOST}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    dispatcher: ollamaChatDispatcher,
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      messages,
-      ...(tools && tools.length > 0 ? { tools } : {}),
-      stream: false,
-      options: { num_ctx: OLLAMA_NUM_CTX },
-    }),
-  });
+  const primaryPayload = buildOllamaChatPayload(messages, tools, OLLAMA_NUM_CTX, true);
+
+  let res = await postOllamaChat(primaryPayload, log, roundCtx);
+
+  let errText = !res.ok ? await res.text().catch(() => '') : '';
+  const retried =
+    !res.ok &&
+    !OLLAMA_RUNNER_CRASH_RETRY_DISABLED &&
+    isOllamaRunnerCrash(res.status, errText);
+
+  if (retried) {
+    const retryCtx = Math.min(OLLAMA_RUNNER_RETRY_NUM_CTX, OLLAMA_NUM_CTX);
+    log?.info(
+      {
+        step: 'ollama_runner_crash_retry',
+        phase: roundCtx.phase,
+        round: roundCtx.round,
+        prior_num_ctx: OLLAMA_NUM_CTX,
+        retry_num_ctx: retryCtx,
+        omit_think: true,
+      },
+      'Ollama runner crashed; retrying chat round with smaller num_ctx and without think'
+    );
+    const retryPayload = buildOllamaChatPayload(messages, tools, retryCtx, false);
+    res = await postOllamaChat(retryPayload, log, {
+      ...roundCtx,
+      phase: `${roundCtx.phase}_runner_retry`,
+    });
+    errText = !res.ok ? await res.text().catch(() => '') : '';
+  }
 
   if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`Ollama error ${res.status}: ${t.slice(0, 500)}`);
+    let msg = `Ollama error ${res.status}: ${errText.slice(0, 500)}`;
+    if (res.status === 500 && /runner process has terminated|llama runner|exited unexpectedly/i.test(errText)) {
+      msg +=
+        ' — Ollama’s model process crashed (often OOM or too-large context). Try OLLAMA_NUM_CTX=8192, set OLLAMA_THINK=false, or check `ollama ps` / host RAM. See Ollama server logs for the real exit reason.';
+    }
+    throw new Error(msg);
   }
 
   const data = (await res.json()) as Record<string, unknown>;
@@ -307,6 +489,10 @@ async function chatRoundNonStreaming(
 
   const msg = data.message as Record<string, unknown> | undefined;
   const contentAcc = typeof msg?.content === 'string' ? msg.content : '';
+  const thinkingAcc = typeof msg?.thinking === 'string' ? msg.thinking : '';
+  if (thinkingAcc) {
+    write('thinking', { text: thinkingAcc, phase: roundCtx.phase });
+  }
   if (contentAcc && !opts?.suppressAssistantTokens) write('token', { text: contentAcc });
 
   const rawCalls = msg?.tool_calls as OllamaToolCall[] | undefined;
@@ -316,6 +502,7 @@ async function chatRoundNonStreaming(
   const assistantMessage: ChatMessage = {
     role: 'assistant',
     content: contentAcc,
+    ...(thinkingAcc ? { thinking: thinkingAcc } : {}),
     ...(hadToolCalls ? { tool_calls: toolCallsForOllamaReplay(mergedCalls) } : {}),
   };
 
@@ -941,25 +1128,32 @@ export async function streamOllamaChatWithTools(
         }
 
         const fullJson = toolResultString(resultPayload);
+        const llmPayload =
+          name === 'leaderboard_query' ? slimLeaderboardPayloadForLlm(resultPayload) : resultPayload;
+        const llmJson = toolResultString(llmPayload);
         const { preview, truncated } = truncateForSse(fullJson);
+        emitLeaderboardSse(write, name, resultPayload);
         write('tool_result', {
           name,
           truncated,
           result_preview: preview,
           result_chars: fullJson.length,
+          ...(llmJson.length !== fullJson.length
+            ? { result_chars_for_model: llmJson.length }
+            : {}),
         });
 
         messages.push({
           role: 'tool',
           tool_name: name,
-          content: fullJson,
+          content: llmJson,
         });
 
         logToolRun(log, {
           source: 'model',
           name,
           args: effectiveArgs,
-          resultJson: fullJson,
+          resultJson: llmJson,
           sseTruncated: truncated,
         });
         persistFullToolIo(traceId, 'model', name, effectiveArgs, fullJson, log, prompt);

@@ -10,7 +10,7 @@ function clampSeasonYear(n: number): number {
 const seasonYear = z.number().int().min(1900).max(2032).nullable().optional();
 
 /** Ollama often sends "true"/"false" strings for booleans. */
-const optionalLooseBoolean = z.preprocess((v: unknown) => {
+export const optionalLooseBoolean = z.preprocess((v: unknown) => {
   if (v === null || v === undefined) return undefined;
   if (typeof v === 'boolean') return v;
   if (typeof v === 'string') {
@@ -106,4 +106,26 @@ export const statcastCompareStatcastArgsSchema = z.object({
   player_b_query: z.string().min(1).max(200),
   game_year: z.coerce.number().int().min(2010).max(2032),
   role: z.enum(['pitcher', 'batter']).optional(),
+});
+
+const leaderboardDatasetEnum = z.enum([
+  'fg_batting_career',
+  'fg_pitching_career',
+  'fg_batting_season',
+  'fg_pitching_season',
+]);
+
+export const leaderboardQueryArgsSchema = z.object({
+  dataset: leaderboardDatasetEnum,
+  sort_metric: z.string().min(1).max(64),
+  order: z.enum(['asc', 'desc']).optional().default('desc'),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(25),
+  columns: z.array(z.string().min(1).max(64)).max(24).optional(),
+  season_from: optionalLooseSeasonYear,
+  season_to: optionalLooseSeasonYear,
+  min_pa: z.coerce.number().int().min(0).max(100_000).optional(),
+  min_ip_outs: z.coerce.number().int().min(0).max(500_000).optional(),
+  min_tbf: z.coerce.number().int().min(0).max(200_000).optional(),
+  qualified_only: optionalLooseBoolean,
+  title: z.string().min(1).max(200).optional(),
 });

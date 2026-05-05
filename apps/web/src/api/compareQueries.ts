@@ -21,7 +21,7 @@ export async function fetchCompareFgCareer(
   const r = await fetch(`/api/players/compare/fg-career?${q}`);
   const j = (await r.json()) as Record<string, unknown> & { error?: string };
   if (!r.ok) {
-    throw new HttpError(String(j.error ?? r.statusText || 'Request failed'), r.status);
+    throw new HttpError(String(j.error ?? (r.statusText || 'Request failed')), r.status);
   }
   return j;
 }
@@ -38,7 +38,7 @@ export async function fetchCompareStatcastSummary(
   const r = await fetch(`/api/players/compare/statcast-summary?${q}`);
   const j = (await r.json()) as Record<string, unknown> & { error?: string };
   if (!r.ok) {
-    throw new HttpError(String(j.error ?? r.statusText || 'Request failed'), r.status);
+    throw new HttpError(String(j.error ?? (r.statusText || 'Request failed')), r.status);
   }
   return j;
 }

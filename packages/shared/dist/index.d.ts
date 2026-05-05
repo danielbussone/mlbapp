@@ -6,13 +6,13 @@ export declare const healthResponseSchema: z.ZodObject<{
     service: z.ZodString;
     version: z.ZodString;
 }, "strip", z.ZodTypeAny, {
+    version: string;
     ok: true;
     service: string;
-    version: string;
 }, {
+    version: string;
     ok: true;
     service: string;
-    version: string;
 }>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 /** POST /chat request body */
@@ -93,4 +93,6 @@ export declare const errorEventDataSchema: z.ZodObject<{
     message: string;
 }>;
 export type ErrorEventData = z.infer<typeof errorEventDataSchema>;
+export { leaderboardAttachmentSchema, leaderboardColumnSchema, leaderboardEventDataSchema, leaderboardProvenanceSchema, type LeaderboardAttachment, type LeaderboardColumn, type LeaderboardEventData, type LeaderboardProvenance, } from './leaderboard.js';
+export { thinkingEventDataSchema, type ThinkingEventData } from './chatThinking.js';
 //# sourceMappingURL=index.d.ts.map

@@ -60,3 +60,16 @@ export const errorEventDataSchema = z.object({
   message: z.string(),
 });
 export type ErrorEventData = z.infer<typeof errorEventDataSchema>;
+
+export {
+  leaderboardAttachmentSchema,
+  leaderboardColumnSchema,
+  leaderboardEventDataSchema,
+  leaderboardProvenanceSchema,
+  type LeaderboardAttachment,
+  type LeaderboardColumn,
+  type LeaderboardEventData,
+  type LeaderboardProvenance,
+} from './leaderboard.js';
+
+export { thinkingEventDataSchema, type ThinkingEventData } from './chatThinking.js';
