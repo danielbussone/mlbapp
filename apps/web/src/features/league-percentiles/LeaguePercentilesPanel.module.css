@@ -1,5 +1,5 @@
 .percentileRow {
-  padding-block: 4px;
+  padding-block: 2px;
 }
 
 .metricLabel {
@@ -31,22 +31,21 @@
   padding-block: 4px;
 }
 
-.panelCard {
-  margin-bottom: var(--mui-spacing-1, 8px);
+/* Padding inside the single League percentiles rail (AccordionDetails). */
+.leaguePercentilesDetails {
   padding: 10px;
-  border: 1px solid;
-  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-  border-radius: var(--mui-shape-borderRadius, 4px);
-  background-color: var(--mui-palette-background-paper, #fff);
 }
 
-.panelTitle {
-  font-weight: 600;
-  margin-bottom: 6px;
+.leaguePercentilesRailRoot {
+  margin-bottom: var(--mui-spacing-1, 8px);
 }
 
-.sectionDivider {
-  margin-block: var(--mui-spacing-1, 8px);
+/*
+ * MUI `<Divider>` applies `margin: 0` on `.MuiDivider-root` via emotion after our bundle,
+ * so a single scoped class loses the cascade. Anchor to `.MuiDivider-root` as well.
+ */
+.sectionDivider:global(.MuiDivider-root) {
+  margin-bottom: 16px;
 }
 
 .sectionCaption {
@@ -63,7 +62,7 @@
 
 /** Extra space between the divider and the "Running" heading (not above the divider). */
 .runningSection > .sectionCaption {
-  margin-top: var(--mui-spacing-1, 8px);
+  margin-top: var(--mui-spacing-1, 16px);
 }
 
 .pitchTypeBlock {
@@ -83,7 +82,7 @@
 }
 
 .indent {
-  padding-left: 28px;
+  padding-left: 5px;
 }
 
 .fieldingGroup {

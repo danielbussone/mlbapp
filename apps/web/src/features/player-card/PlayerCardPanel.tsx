@@ -26,7 +26,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { RailCollapsibleSection } from '@/components/rail/RailCollapsibleSection.js';
 import { Link } from 'react-router-dom';
 import {
@@ -494,13 +494,26 @@ export function PlayerCardPanel({
 
   const theme = useTheme();
   const isMdUp = useMediaQuery(theme.breakpoints.up('md'));
+  const isWidePageViewport = useMediaQuery('(min-width:1440px)');
+  /** Page mode only: Bio | plots | percentile rail */
+  const isPageThreeColumn = variant === 'page' && isWidePageViewport;
   /** Desktop-only: narrow Statcast rail when Savant has nothing for this player/year. */
   const [statcastCollapsed, setStatcastCollapsed] = useState(false);
+  /** Wide page 3-column: collapsible plots (middle) and percentiles (right) rails. */
+  const [plotsRailCollapsed, setPlotsRailCollapsed] = useState(false);
+  const [percentilesRailCollapsed, setPercentilesRailCollapsed] = useState(false);
   const [fieldingHistoryRows, setFieldingHistoryRows] = useState<Record<string, unknown>[]>([]);
   /** `fg-fielding` fetch is async from main FG card; gate fielding tables + OAA on this so empty rows do not imply “no FG fielding”. */
   const [fieldingHistoryLoading, setFieldingHistoryLoading] = useState(() => defaultRole === 'fielding');
   const [mlbBio, setMlbBio] = useState<MlbBioWirePayload | null>(null);
   const [mlbBioLoading, setMlbBioLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isPageThreeColumn) {
+      setPlotsRailCollapsed(false);
+      setPercentilesRailCollapsed(false);
+    }
+  }, [isPageThreeColumn]);
 
   const battingCard = useMemo(() => battingCardLinesFromCareerViews(fgBattingCard), [fgBattingCard]);
   const pitchingCard = useMemo(() => pitchingCardLinesFromCareerViews(fgPitchingCard), [fgPitchingCard]);
@@ -795,6 +808,214 @@ export function PlayerCardPanel({
     </Stack>
   );
 
+  const statcastHeadingLabel =
+    role === 'fielding' ? (isPageThreeColumn ? 'OAA' : 'OAA & percentiles') : 'Statcast';
+
+  const leaguePercentilesPanel =
+    role === 'fielding' ? (
+      <LeaguePercentilesPanel playerId={playerId} season={season} cardRole="fielding" />
+    ) : role === 'batting' || role === 'pitching' ? (
+      <LeaguePercentilesPanel
+        playerId={playerId}
+        season={season}
+        cardRole={role === 'pitching' ? 'pitching' : 'batting'}
+        pitchTypes={pitchingMixDisplay.map((r) => String(r.pitch_type ?? ''))}
+      />
+    ) : null;
+
+  const battingPitchingStatcastAlerts =
+    role === 'fielding' ? null : (
+      <>
+        {!statcast && (
+          <Typography color="text.secondary">No Statcast payload.</Typography>
+        )}
+        {statcast && statcast.statcast_available === false && (
+          <Alert severity="info" className={styles.alertDense}>
+            {String(statcast.reason ?? 'Statcast unavailable')}
+          </Alert>
+        )}
+      </>
+    );
+
+  const battingPitchingStatcastPlotSections =
+    role === 'fielding' ? null : (
+      <>
+        {statcast && statcastAvailable && role === 'pitching' && (
+          <Stack spacing={1}>
+            <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Pitch mix">
+              {pitchingMixDisplay.length > 0 &&
+                (statcast.velo_dist != null && statcast.velo_dist.length > 0 ? (
+                  <PitchMixVeloTable
+                    mix={pitchingMixDisplay}
+                    veloRows={pitchingVeloDisplay ?? statcast.velo_dist}
+                    byStandRows={
+                      pitchingMixByStandForVelo != null && pitchingMixByStandForVelo.length > 0
+                        ? pitchingMixByStandForVelo
+                        : undefined
+                    }
+                    leagueAvgVeloByPitch={statcast.league_avg_velo_by_pitch}
+                  />
+                ) : (
+                  <Table size="small" className={styles.mixTable}>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Pitch</TableCell>
+                        <TableCell align="right">%</TableCell>
+                        <TableCell align="right">Velo</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {pitchingMixDisplay.map((row, i) => {
+                        const pt = String(row.pitch_type ?? '');
+                        return (
+                          <TableRow key={i}>
+                            <TableCell>
+                              <Stack direction="row" alignItems="center" spacing={0.75}>
+                                <Box
+                                  component="span"
+                                  className={styles.pitchTypeSwatch}
+                                  sx={{ bgcolor: pitchTypeMovementColor(pt) }}
+                                />
+                                <Stack spacing={0} className={styles.stackMinW0}>
+                                  <Typography component="span" variant="body2" noWrap>
+                                    {pitchTypeName(pt)}
+                                  </Typography>
+                                  <Typography
+                                    component="span"
+                                    variant="caption"
+                                    color="text.secondary"
+                                    className={styles.pitchMetaCaption}
+                                  >
+                                    {pt}
+                                  </Typography>
+                                </Stack>
+                              </Stack>
+                            </TableCell>
+                            <TableCell align="right">{String(row.pct ?? '')}</TableCell>
+                            <TableCell align="right">{String(row.avg_velo ?? '')}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                ))}
+              {(pitchingMixDisplay.length > 0 || pitchingMixExtendedDisplay.length > 0) && (
+                <Button
+                  component={Link}
+                  size="small"
+                  variant="text"
+                  to={`/players/${playerId}/pitch-mix?season=${season}`}
+                  className={styles.trendLinkBtn}
+                >
+                  Pitch usage & process rates →
+                </Button>
+              )}
+            </RailCollapsibleSection>
+            {statcast.sample != null && statcast.sample.length > 0 && (
+              <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Pitch movement">
+                <MovementMiniPlot
+                  rows={
+                    role === 'pitching'
+                      ? (statcastSampleMovement ?? statcast.sample)
+                      : statcast.sample
+                  }
+                  leagueMovement={leagueMovementForPlot ?? undefined}
+                  armAngle={armOverlay ?? undefined}
+                />
+              </RailCollapsibleSection>
+            )}
+          </Stack>
+        )}
+        {statcast && statcastAvailable && role === 'batting' && (
+          <Stack spacing={1}>
+            <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Batted ball">
+              <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                <Chip size="small" label={`BBE ${String(statcast.batted_ball?.bbe ?? '—')}`} />
+                <Chip size="small" label={`EV ${String(statcast.batted_ball?.avg_ev ?? '—')}`} />
+                <Chip size="small" label={`LA ${String(statcast.batted_ball?.avg_la ?? '—')}`} />
+              </Stack>
+            </RailCollapsibleSection>
+            <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Bat tracking">
+              {statcast.bat_path != null && typeof statcast.bat_path === 'object' && (
+                <BatPathSummary batPath={statcast.bat_path as BatPathApiRow} />
+              )}
+              <Button
+                component={Link}
+                size="small"
+                variant="text"
+                to={`/players/${playerId}/trends?to=${season}&from=${Math.max(2015, season - 7)}`}
+                className={`${styles.batTrendLinkBtn}${
+                  statcast.bat_path != null ? ` ${styles.batTrendLinkBtnSpaced}` : ''
+                }`}
+              >
+                Career bat-tracking trends →
+              </Button>
+            </RailCollapsibleSection>
+            {statcast.sample != null && statcast.sample.length > 0 && (
+              <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Spray chart">
+                <SprayChart rows={statcast.sample} gameYear={season} />
+              </RailCollapsibleSection>
+            )}
+          </Stack>
+        )}
+      </>
+    );
+
+  const statcastPlotsColumnHeader = (
+    <Stack
+      direction="row"
+      alignItems="center"
+      justifyContent="space-between"
+      className={styles.statcastHeaderRow}
+    >
+      <Typography variant="subtitle2" className={styles.subtitleStrong}>
+        {statcastHeadingLabel}
+      </Typography>
+      {isMdUp && (
+        <IconButton
+          size="small"
+          aria-label={
+            isPageThreeColumn
+              ? role === 'fielding'
+                ? 'Collapse OAA panel'
+                : 'Collapse Statcast plots panel'
+              : role === 'fielding'
+                ? 'Collapse OAA and percentiles panel'
+                : 'Collapse Statcast panel'
+          }
+          onClick={() => {
+            if (isPageThreeColumn) setPlotsRailCollapsed(true);
+            else setStatcastCollapsed(true);
+          }}
+          edge="end"
+        >
+          <ChevronRight fontSize="small" />
+        </IconButton>
+      )}
+    </Stack>
+  );
+
+  /** Only used when wide-page 3-column percentiles rail is expanded */
+  const percentilesRailColumnHeader = (
+    <Stack
+      direction="row"
+      alignItems="center"
+      justifyContent="flex-end"
+      className={styles.statcastHeaderRow}
+    >
+      {isMdUp && (
+        <IconButton
+          size="small"
+          aria-label="Collapse league percentiles panel"
+          onClick={() => setPercentilesRailCollapsed(true)}
+          edge="end"
+        >
+          <ChevronRight fontSize="small" />
+        </IconButton>
+      )}
+    </Stack>
+  );
+
   const inner = (
     <>
       {error && (
@@ -808,6 +1029,12 @@ export function PlayerCardPanel({
           <Box
             className={`${styles.cardGrid} ${
               collapseStatcastLayout ? styles.cardGridCollapsed : styles.cardGridExpanded
+            }${isPageThreeColumn && !collapseStatcastLayout ? ` ${styles.cardGridPageThreeCol}` : ''}${
+              isPageThreeColumn && !collapseStatcastLayout && plotsRailCollapsed ? ` ${styles.cardGridThreePlotsCollapsed}` : ''
+            }${
+              isPageThreeColumn && !collapseStatcastLayout && percentilesRailCollapsed
+                ? ` ${styles.cardGridThreePercentilesCollapsed}`
+                : ''
             }`}
           >
             <Box
@@ -1004,32 +1231,76 @@ export function PlayerCardPanel({
                   <ChevronLeft fontSize="small" />
                 </IconButton>
               </Box>
+            ) : isPageThreeColumn ? (
+              <>
+                {plotsRailCollapsed ? (
+                  <Box
+                    className={`${styles.statcastRailCollapsed}${
+                      !percentilesRailCollapsed ? ` ${styles.statcastRailCollapsedInterior}` : ''
+                    }`}
+                  >
+                    <IconButton
+                      size="small"
+                      aria-label={
+                        role === 'fielding' ? 'Expand OAA panel' : 'Expand Statcast plots panel'
+                      }
+                      onClick={() => setPlotsRailCollapsed(false)}
+                      className={styles.railChevron}
+                    >
+                      <ChevronLeft fontSize="small" />
+                    </IconButton>
+                  </Box>
+                ) : (
+                  <Box className={`${styles.gridCellStatcastPlots} ${styles.gridPadPage}`}>
+                    {statcastPlotsColumnHeader}
+                    {role === 'fielding' ? (
+                      <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="OAA field grid">
+                        <OaaHeatmapPlaceholder
+                          playerId={playerId}
+                          gameYear={season}
+                          fieldingRows={fieldingHistoryRows}
+                          fieldingRowsReady={!fieldingHistoryLoading}
+                        />
+                      </RailCollapsibleSection>
+                    ) : fetchingSc ? (
+                      <Stack spacing={1.25} sx={{ mt: 0.5 }} aria-busy="true" aria-label="Loading Statcast">
+                        <Skeleton variant="rounded" width="100%" height={36} />
+                        <Skeleton variant="rounded" width="100%" height={120} />
+                        <Skeleton variant="rounded" width="95%" height={80} />
+                      </Stack>
+                    ) : (
+                      <>
+                        {battingPitchingStatcastAlerts}
+                        {battingPitchingStatcastPlotSections}
+                      </>
+                    )}
+                  </Box>
+                )}
+                {percentilesRailCollapsed ? (
+                  <Box className={styles.statcastRailCollapsed}>
+                    <IconButton
+                      size="small"
+                      aria-label="Expand league percentiles panel"
+                      onClick={() => setPercentilesRailCollapsed(false)}
+                      className={styles.railChevron}
+                    >
+                      <ChevronLeft fontSize="small" />
+                    </IconButton>
+                  </Box>
+                ) : (
+                  <Box className={`${styles.gridCellPercentilesRail} ${styles.gridPadPage}`}>
+                    {percentilesRailColumnHeader}
+                    {leaguePercentilesPanel}
+                  </Box>
+                )}
+              </>
             ) : (
               <Box
                 className={`${styles.gridCellRight} ${
                   variant === 'sidebar' ? styles.gridPadSidebar : styles.gridPadPage
                 }`}
               >
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  justifyContent="space-between"
-                  className={styles.statcastHeaderRow}
-                >
-                  <Typography variant="subtitle2" className={styles.subtitleStrong}>
-                    {role === 'fielding' ? 'OAA & percentiles' : 'Statcast'}
-                  </Typography>
-                  {isMdUp && (
-                    <IconButton
-                      size="small"
-                      aria-label={role === 'fielding' ? 'Collapse OAA and percentiles panel' : 'Collapse Statcast panel'}
-                      onClick={() => setStatcastCollapsed(true)}
-                      edge="end"
-                    >
-                      <ChevronRight fontSize="small" />
-                    </IconButton>
-                  )}
-                </Stack>
+                {statcastPlotsColumnHeader}
                 {role === 'fielding' ? (
                   <Stack spacing={1}>
                     <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="OAA field grid">
@@ -1040,7 +1311,7 @@ export function PlayerCardPanel({
                         fieldingRowsReady={!fieldingHistoryLoading}
                       />
                     </RailCollapsibleSection>
-                    <LeaguePercentilesPanel playerId={playerId} season={season} cardRole="fielding" />
+                    {leaguePercentilesPanel}
                   </Stack>
                 ) : fetchingSc ? (
                   <Stack spacing={1.25} sx={{ mt: 0.5 }} aria-busy="true" aria-label="Loading Statcast">
@@ -1050,140 +1321,9 @@ export function PlayerCardPanel({
                   </Stack>
                 ) : (
                   <>
-                    {!statcast && (
-                      <Typography color="text.secondary">No Statcast payload.</Typography>
-                    )}
-                    {statcast && statcast.statcast_available === false && (
-                      <Alert severity="info" className={styles.alertDense}>
-                        {String(statcast.reason ?? 'Statcast unavailable')}
-                      </Alert>
-                    )}
-                    {(role === 'batting' || role === 'pitching') && (
-                      <LeaguePercentilesPanel
-                        playerId={playerId}
-                        season={season}
-                        cardRole={role === 'pitching' ? 'pitching' : 'batting'}
-                        pitchTypes={pitchingMixDisplay.map((r) => String(r.pitch_type ?? ''))}
-                      />
-                    )}
-                    {statcast && statcastAvailable && role === 'pitching' && (
-                      <Stack spacing={1}>
-                        <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Pitch mix">
-                          {pitchingMixDisplay.length > 0 &&
-                            (statcast.velo_dist != null && statcast.velo_dist.length > 0 ? (
-                              <PitchMixVeloTable
-                                mix={pitchingMixDisplay}
-                                veloRows={pitchingVeloDisplay ?? statcast.velo_dist}
-                                byStandRows={
-                                  pitchingMixByStandForVelo != null && pitchingMixByStandForVelo.length > 0
-                                    ? pitchingMixByStandForVelo
-                                    : undefined
-                                }
-                                leagueAvgVeloByPitch={statcast.league_avg_velo_by_pitch}
-                              />
-                            ) : (
-                              <Table size="small" className={styles.mixTable}>
-                                <TableHead>
-                                  <TableRow>
-                                    <TableCell>Pitch</TableCell>
-                                    <TableCell align="right">%</TableCell>
-                                    <TableCell align="right">Velo</TableCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {pitchingMixDisplay.map((row, i) => {
-                                    const pt = String(row.pitch_type ?? '');
-                                    return (
-                                      <TableRow key={i}>
-                                        <TableCell>
-                                          <Stack direction="row" alignItems="center" spacing={0.75}>
-                                            <Box
-                                              component="span"
-                                              className={styles.pitchTypeSwatch}
-                                              sx={{ bgcolor: pitchTypeMovementColor(pt) }}
-                                            />
-                                            <Stack spacing={0} className={styles.stackMinW0}>
-                                              <Typography component="span" variant="body2" noWrap>
-                                                {pitchTypeName(pt)}
-                                              </Typography>
-                                              <Typography
-                                                component="span"
-                                                variant="caption"
-                                                color="text.secondary"
-                                                className={styles.pitchMetaCaption}
-                                              >
-                                                {pt}
-                                              </Typography>
-                                            </Stack>
-                                          </Stack>
-                                        </TableCell>
-                                        <TableCell align="right">{String(row.pct ?? '')}</TableCell>
-                                        <TableCell align="right">{String(row.avg_velo ?? '')}</TableCell>
-                                      </TableRow>
-                                    );
-                                  })}
-                                </TableBody>
-                              </Table>
-                            ))}
-                          {(pitchingMixDisplay.length > 0 || pitchingMixExtendedDisplay.length > 0) && (
-                            <Button
-                              component={Link}
-                              size="small"
-                              variant="text"
-                              to={`/players/${playerId}/pitch-mix?season=${season}`}
-                              className={styles.trendLinkBtn}
-                            >
-                              Pitch usage & process rates →
-                            </Button>
-                          )}
-                        </RailCollapsibleSection>
-                        {statcast.sample != null && statcast.sample.length > 0 && (
-                          <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Pitch movement">
-                            <MovementMiniPlot
-                              rows={
-                                role === 'pitching'
-                                  ? (statcastSampleMovement ?? statcast.sample)
-                                  : statcast.sample
-                              }
-                              leagueMovement={leagueMovementForPlot ?? undefined}
-                              armAngle={armOverlay ?? undefined}
-                            />
-                          </RailCollapsibleSection>
-                        )}
-                      </Stack>
-                    )}
-                    {statcast && statcastAvailable && role === 'batting' && (
-                      <Stack spacing={1}>
-                        <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Batted ball">
-                          <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                            <Chip size="small" label={`BBE ${String(statcast.batted_ball?.bbe ?? '—')}`} />
-                            <Chip size="small" label={`EV ${String(statcast.batted_ball?.avg_ev ?? '—')}`} />
-                            <Chip size="small" label={`LA ${String(statcast.batted_ball?.avg_la ?? '—')}`} />
-                          </Stack>
-                        </RailCollapsibleSection>
-                        <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Bat tracking">
-                          {statcast.bat_path != null && typeof statcast.bat_path === 'object' && (
-                            <BatPathSummary batPath={statcast.bat_path as BatPathApiRow} />
-                          )}
-                          <Button
-                            component={Link}
-                            size="small"
-                            variant="text"
-                            to={`/players/${playerId}/trends?to=${season}&from=${Math.max(2015, season - 7)}`}
-                            className={`${styles.batTrendLinkBtn}${
-                              statcast.bat_path != null ? ` ${styles.batTrendLinkBtnSpaced}` : ''
-                            }`}
-                          >
-                            Career bat-tracking trends →
-                          </Button>
-                        </RailCollapsibleSection>
-                        {statcast.sample != null && statcast.sample.length > 0 && (
-                          <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Spray chart">
-                            <SprayChart rows={statcast.sample} gameYear={season} />
-                          </RailCollapsibleSection>
-                        )}
-                      </Stack>
-                    )}
+                    {battingPitchingStatcastAlerts}
+                    {leaguePercentilesPanel}
+                    {battingPitchingStatcastPlotSections}
                   </>
                 )}
               </Box>
@@ -1204,7 +1344,11 @@ export function PlayerCardPanel({
   }
 
   return (
-    <Container maxWidth="lg" className={styles.pageContainer}>
+    <Container
+      maxWidth={isPageThreeColumn ? false : 'lg'}
+      disableGutters={isPageThreeColumn}
+      className={`${styles.pageContainer}${isPageThreeColumn ? ` ${styles.pageContainerWide}` : ''}`}
+    >
       {toolbar}
       {inner}
     </Container>

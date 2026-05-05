@@ -9,6 +9,7 @@ import { alpha } from '@mui/material/styles';
 import React, { forwardRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useLeaguePercentilesQuery } from '@/api/playerQueries.js';
 import { RailCollapsibleSection } from '@/components/rail/RailCollapsibleSection.js';
+import railShell from '@/components/rail/RailCollapsibleSection.module.css';
 import type { LeaguePercentilesResponse, PercentileDirection, PercentileSlot } from './leaguePercentilesTypes.js';
 import {
   goodnessDisplayPercentile,
@@ -644,7 +645,12 @@ function percentilesPanelHasContent(data: LeaguePercentilesResponse, pitchTypes:
 
 function wrapLeaguePercentilesRail(inner: ReactNode) {
   return (
-    <RailCollapsibleSection title="League percentiles" titleTypographyClassName={styles.railAccordionTitle}>
+    <RailCollapsibleSection
+      title="League percentiles"
+      titleTypographyClassName={styles.railAccordionTitle}
+      className={styles.leaguePercentilesRailRoot}
+      detailsClassName={`${railShell.detailsFlush} ${styles.leaguePercentilesDetails}`}
+    >
       {inner}
     </RailCollapsibleSection>
   );
@@ -699,10 +705,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
     const battingExpectedIds = SAVANT_BATTING_EXPECTED_ORDER.filter((id) => fieldingSlotHasValue(bat[id]));
     const hasBattingExpected = battingExpectedIds.length > 0;
     return wrapLeaguePercentilesRail(
-      <Box className={styles.panelCard}>
-        <Typography variant="subtitle2" className={styles.panelTitle}>
-          Percentiles
-        </Typography>
+      <>
         {hasBattingValue && (
           <>
             <PercentileCollapsibleSection
@@ -755,7 +758,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
             {renderOrderedRows(SAVANT_RUNNING_ORDER, run)}
           </Box>
         )}
-      </Box>
+      </>
     );
   }
 
@@ -770,10 +773,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
     const pitchingExpectedIds = SAVANT_PITCHING_EXPECTED_ORDER.filter((id) => fieldingSlotHasValue(pit[id]));
     const hasPitchingExpected = pitchingExpectedIds.length > 0;
     return wrapLeaguePercentilesRail(
-      <Box className={styles.panelCard}>
-        <Typography variant="subtitle2" className={styles.panelTitle}>
-          Percentiles
-        </Typography>
+      <>
         {hasPitchingWar && (
           <>
             <PercentileCollapsibleSection
@@ -841,7 +841,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
             })}
           </>
         )}
-      </Box>
+      </>
     );
   }
 
@@ -862,10 +862,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
     const totalHasRows =
       totalGroup != null && SAVANT_FIELDING_ORDER.some((id) => fieldingSlotHasValue(totalGroup.percentiles[id]));
     return wrapLeaguePercentilesRail(
-      <Box className={styles.panelCard}>
-        <Typography variant="subtitle2" className={styles.panelTitle}>
-          Percentiles
-        </Typography>
+      <>
         {totalGroup != null ? (
           <>
             {totalHasRows && (
@@ -939,7 +936,7 @@ export function LeaguePercentilesPanel({ playerId, season, cardRole, positionCod
             {renderOrderedRows(SAVANT_RUNNING_ORDER, run)}
           </Box>
         )}
-      </Box>
+      </>
     );
   }
 

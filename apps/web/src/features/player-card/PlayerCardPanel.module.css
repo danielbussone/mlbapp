@@ -45,6 +45,34 @@
   }
 }
 
+/*
+ * Marker paired with JSX (page variant + breakpoint).
+ * Helps grid children truncate/scroll cleanly in wide layout.
+ */
+.cardGridPageThreeCol {
+  min-height: 0;
+}
+
+/* Wide page-only: Bio | Plots | Percentiles (see TSX variant + breakpoint guard). */
+@media (min-width: 1440px) {
+  .cardGridExpanded.cardGridPageThreeCol {
+    gap: var(--mui-spacing-2, 0px);
+    grid-template-columns: minmax(450px, 1fr) minmax(550px, 580px) minmax(320px, 500px);
+  }
+
+  .cardGridExpanded.cardGridPageThreeCol.cardGridThreePlotsCollapsed:not(.cardGridThreePercentilesCollapsed) {
+    grid-template-columns: minmax(450px, 1fr) 44px minmax(320px, 500px);
+  }
+
+  .cardGridExpanded.cardGridPageThreeCol.cardGridThreePercentilesCollapsed:not(.cardGridThreePlotsCollapsed) {
+    grid-template-columns: minmax(450px, 1fr) minmax(550px, 580px) 44px;
+  }
+
+  .cardGridExpanded.cardGridPageThreeCol.cardGridThreePlotsCollapsed.cardGridThreePercentilesCollapsed {
+    grid-template-columns: minmax(450px, 1fr) 44px 44px;
+  }
+}
+
 .cardGridCollapsed {
   grid-template-columns: 1fr;
 }
@@ -120,7 +148,33 @@
   margin-block: auto;
 }
 
+/* Collapsed rail that has another grid column to its right — keep divider */
+.statcastRailCollapsedInterior {
+  border-right-width: 1px;
+  border-right-style: solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
 .gridCellRight {
+  min-width: 0;
+  background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+}
+
+/* Middle column (plots/tables — wide page Statcast pane). Default paper/no tint. */
+.gridCellStatcastPlots {
+  min-width: 0;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+@media (min-width: 1440px) {
+  .cardGridExpanded.cardGridPageThreeCol > .gridCellStatcastPlots {
+    border-right-width: 1px;
+    border-right-style: solid;
+  }
+}
+
+/* Right column rail (percentile sliders — subtle background). */
+.gridCellPercentilesRail {
   min-width: 0;
   background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
 }
@@ -182,4 +236,9 @@
 
 .pageContainer {
   padding-block: var(--mui-spacing-3, 24px);
+}
+
+/* Near full bleed on wide desktop; gutters via TSX sx when Container maxWidth is false */
+.pageContainerWide {
+  padding-inline: var(--mui-spacing-2, 16px);
 }
