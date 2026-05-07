@@ -1,5 +1,6 @@
 .miniCard {
-  background-color: transparent;
+  /** Inset “chart well” on Statcast `action.hover` column — improves diagram contrast vs rail wash. */
+  background-color: var(--mui-palette-background-paper, #fff);
   border-radius: var(--mui-shape-borderRadius, 4px);
   padding: 6px 8px 4px;
   min-height: 168px;
@@ -30,11 +31,6 @@
 
 .empPrimary {
   color: var(--mui-palette-primary-main, #00838f);
-  font-weight: 700;
-}
-
-.empWarning {
-  color: var(--mui-palette-warning-main, #ed6c02);
   font-weight: 700;
 }
 

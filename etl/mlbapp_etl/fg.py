@@ -74,7 +74,7 @@ from mlbapp_etl.fg_api import (
 )
 from mlbapp_etl.fg_qualify import batting_rate_stat_qualified, pitching_rate_stat_qualified
 from mlbapp_etl.jsonutil import row_to_stats_json
-from mlbapp_etl.runtime import load_repo_dotenv
+from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
 
 # Default lower bound when ``pnpm etl:fg`` is run with no season flags (major-league FG history).
 _DEFAULT_FG_START_SEASON = 1871
@@ -140,17 +140,6 @@ def refresh_fg_consolidated_mviews(
                     # Flyway not applied yet (e.g. V28 primary matviews)
                     pass
     return refreshed
-
-
-def normalize_cli_argv(argv: list[str] | None) -> list[str]:
-    """Drop leading ``--`` tokens (pnpm/npm pass them through to the script)."""
-    if argv is None:
-        out = sys.argv[1:]
-    else:
-        out = list(argv)
-    while out and out[0] == "--":
-        out = out[1:]
-    return out
 
 
 def _fetch_batting(
@@ -438,7 +427,7 @@ CROSS JOIN LATERAL (
     (
       SELECT trim(kv.value)
       FROM jsonb_each_text(f.stats_jsonb) AS kv
-      WHERE kv.key ILIKE '%mlbam%'
+      WHERE kv.key ILIKE '%%mlbam%%'
         AND kv.key !~* '^(playerid|idfg)$'
         AND trim(kv.value) ~ '^[0-9]{5,9}(\.[0-9]+)?$'
       LIMIT 1
@@ -481,7 +470,7 @@ CROSS JOIN LATERAL (
     (
       SELECT trim(kv.value)
       FROM jsonb_each_text(f.stats_jsonb) AS kv
-      WHERE kv.key ILIKE '%mlbam%'
+      WHERE kv.key ILIKE '%%mlbam%%'
         AND kv.key !~* '^(playerid|idfg)$'
         AND trim(kv.value) ~ '^[0-9]{5,9}(\.[0-9]+)?$'
       LIMIT 1
@@ -524,7 +513,7 @@ CROSS JOIN LATERAL (
     (
       SELECT trim(kv.value)
       FROM jsonb_each_text(f.stats_jsonb) AS kv
-      WHERE kv.key ILIKE '%mlbam%'
+      WHERE kv.key ILIKE '%%mlbam%%'
         AND kv.key !~* '^(playerid|idfg)$'
         AND trim(kv.value) ~ '^[0-9]{5,9}(\.[0-9]+)?$'
       LIMIT 1

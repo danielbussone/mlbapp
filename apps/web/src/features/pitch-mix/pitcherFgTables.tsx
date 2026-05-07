@@ -9,7 +9,11 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import { fgCardSeasonRowIsSelected, type FgBattingCardApi } from '@/lib/batterFgTables.js';
+import {
+  fgCardSeasonLabelToYear,
+  fgCardSeasonRowIsSelected,
+  type FgBattingCardApi,
+} from '@/lib/batterFgTables.js';
 import fgTableShell from '@/styles/fgTableShell.module.css';
 
 export type PitchingCardLine = {
@@ -144,11 +148,14 @@ export function PitchingCardTable({
   lines,
   variant,
   selectedSeason,
+  onSeasonSelect,
 }: {
   lines: PitchingCardLine[];
   variant: 'page' | 'sidebar';
   /** When set, the matching MLB season row is subtly highlighted (not Career). */
   selectedSeason?: number;
+  /** When set, clicking a season row (not Career) updates the card season. */
+  onSeasonSelect?: (year: number) => void;
 }) {
   if (lines.length === 0) return null;
   return (
@@ -176,19 +183,36 @@ export function PitchingCardTable({
         <TableBody>
           {lines.map((line) => {
             const selected = fgCardSeasonRowIsSelected(line.seasonLabel, selectedSeason);
+            const rowYear = fgCardSeasonLabelToYear(line.seasonLabel);
+            const clickable = rowYear !== undefined && onSeasonSelect != null;
             return (
               <TableRow
                 key={line.seasonLabel}
-                sx={
-                  selected
+                hover={clickable}
+                onClick={clickable ? () => onSeasonSelect(rowYear) : undefined}
+                onKeyDown={
+                  clickable
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSeasonSelect(rowYear);
+                        }
+                      }
+                    : undefined
+                }
+                tabIndex={clickable ? 0 : undefined}
+                aria-label={clickable ? `Select season ${rowYear}` : undefined}
+                sx={{
+                  ...(selected
                     ? {
                         bgcolor: 'action.selected',
                         borderLeft: 3,
                         borderLeftColor: 'primary.main',
                         '& .MuiTableCell-root': { fontWeight: 600 },
                       }
-                    : undefined
-                }
+                    : {}),
+                  ...(clickable ? { cursor: 'pointer' } : {}),
+                }}
               >
                 <TableCell
                   component="th"

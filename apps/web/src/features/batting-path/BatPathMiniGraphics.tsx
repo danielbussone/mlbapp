@@ -1,5 +1,5 @@
 /**
- * Bat-tracking mini graphics (SVG). Styling follows MUI theme (transparent cards).
+ * Bat-tracking mini graphics (SVG). Theme-aware via `useMuiAppliedDarkMode` + literal SVG colors (see module CSS for card chrome).
  *
  * **Exports (player card tiles)** — each uses `MiniCard` unless noted:
  * - `BatSpeedGauge` — semicircle mph dial, zone fills, tick labels, league + player needles.
@@ -11,12 +11,29 @@
  * `DirectionScaleLabels` + `normalizeStand` (attack direction + swing tilt alignment).
  */
 
-import { useId, type ReactNode } from 'react';
+import { useId, type CSSProperties, type ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { lighten, useTheme, type SxProps, type Theme } from '@mui/material/styles';
 import styles from './BatPathMiniGraphics.module.css';
 import swingTiltSilhouetteSrc from './assets/swing-tilt-silhouette.png';
+import { useMuiAppliedDarkMode } from '@/hooks/useMuiAppliedDarkMode.js';
+
+/** Hex/rgba only (no CSS variables) for SVG presentation attributes. */
+const DIAGRAM_SVG_DARK = {
+  white: '#ffffff',
+  whiteMuted: 'rgba(255,255,255,0.38)',
+  whiteSoft: 'rgba(255,255,255,0.28)',
+  plateFill: 'rgba(255,255,255,0.09)',
+  plateStroke: 'rgba(255,255,255,0.5)',
+  /** Aligns with MUI dark `warning.main` / Swing Tilt 0° line. */
+  warningMain: '#ffb74d',
+  warningLight: '#ffcc80',
+  warningDark: '#f57c00',
+} as const;
+
+const DIAGRAM_SVG_LIGHT_INK = '#212121';
+const DIAGRAM_SVG_LIGHT_MUTED = '#424242';
 
 /** Body renderer for `SwingTiltGraphic` (bat/plate geometry is shared). */
 export type SwingTiltFigureVariant = 'stick' | 'mocap' | 'silhouette';
@@ -166,6 +183,7 @@ function MiniCard({ title, children, footer, contentSx, footerSx, cardSx, titleS
 /** Full 180° semicircular gauge 0–80 mph; non-linear scale; annular sectors (smooth arc). */
 export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMph: number | null }) {
   const theme = useTheme();
+  const isDark = useMuiAppliedDarkMode();
   /** Bowl center; `rOuter`/`rInner` define the mph annulus. */
   const cx = 70;
   const cy = 82;
@@ -176,13 +194,28 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
   const needleEnd = needle != null ? polar(cx, cy, rInner - 4, needle) : null;
 
   const redLight = theme.palette.error.light;
-  const zones: { lo: number; hi: number; color: string }[] = [
-    { lo: 0, hi: 50, color: theme.palette.grey[600] },
-    { lo: 50, hi: 60, color: theme.palette.grey[500] },
-    { lo: 60, hi: 70, color: lighten(redLight, 0.22) },
-    { lo: 70, hi: 75, color: redLight },
-    { lo: 75, hi: 80, color: theme.palette.error.dark },
-  ];
+  /** Dark: lift grey bands so white/light ink reads; light: original mid-greys + heat. */
+  const zones: { lo: number; hi: number; color: string }[] = isDark
+    ? [
+        { lo: 0, hi: 50, color: theme.palette.grey[800] },
+        { lo: 50, hi: 60, color: theme.palette.grey[700] },
+        { lo: 60, hi: 70, color: lighten(redLight, 0.08) },
+        { lo: 70, hi: 75, color: redLight },
+        { lo: 75, hi: 80, color: theme.palette.error.dark },
+      ]
+    : [
+        { lo: 0, hi: 50, color: theme.palette.grey[600] },
+        { lo: 50, hi: 60, color: theme.palette.grey[500] },
+        { lo: 60, hi: 70, color: lighten(redLight, 0.22) },
+        { lo: 70, hi: 75, color: redLight },
+        { lo: 75, hi: 80, color: theme.palette.error.dark },
+      ];
+
+  /** Literals only — `theme.palette.grey[*]` is often `var(--mui-palette-*)` and is ignored by SVG. */
+  const gaugeMarkColor = isDark ? DIAGRAM_SVG_DARK.white : DIAGRAM_SVG_LIGHT_INK;
+  const gaugeLeagueDash = isDark ? DIAGRAM_SVG_DARK.white : DIAGRAM_SVG_LIGHT_MUTED;
+  const gaugeRimStroke = isDark ? DIAGRAM_SVG_DARK.whiteMuted : theme.palette.divider;
+  const gaugeBaseLine = isDark ? DIAGRAM_SVG_DARK.whiteSoft : theme.palette.text.disabled;
 
   const ticks = [0, 50, 60, 70, 75, 80];
   const leagueAng = leagueMph != null ? mphToAngle(Math.max(0, Math.min(80, leagueMph))) : null;
@@ -208,7 +241,7 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
     >
       <Box className={styles.gaugeSvgWrap}>
         {/* Big mph readout over the gauge */}
-        <Typography variant="h6" className={styles.gaugeOverlayTitle}>
+        <Typography variant="h6" className={styles.gaugeOverlayTitle} sx={{ color: 'text.primary' }}>
           {mph != null ? `${mph} mph` : '—'}
         </Typography>
         <svg viewBox="0 0 140 100" width="140" height="100" style={{ marginTop: 16 }}>
@@ -229,7 +262,7 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
           <path
             d={rimPath}
             fill="none"
-            stroke={theme.palette.divider}
+            stroke={gaugeRimStroke}
             strokeWidth={1}
             opacity={0.95}
           />
@@ -239,9 +272,9 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
             y1={cy}
             x2={cx + rOuter}
             y2={cy}
-            stroke={theme.palette.text.disabled}
+            stroke={gaugeBaseLine}
             strokeWidth={1}
-            opacity={0.5}
+            opacity={isDark ? 0.85 : 0.5}
           />
           {/* mph tick marks + numeric labels */}
           {ticks.map((t) => {
@@ -256,13 +289,13 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
                   y1={inner.y}
                   x2={outer.x}
                   y2={outer.y}
-                  stroke={theme.palette.text.secondary}
+                  stroke={gaugeMarkColor}
                   strokeWidth={1}
                 />
                 <text
                   x={lab.x}
                   y={lab.y}
-                  fill={theme.palette.text.secondary}
+                  fill={gaugeMarkColor}
                   fontSize="9"
                   textAnchor="middle"
                   dominantBaseline="middle"
@@ -279,8 +312,8 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
               y1={cy}
               x2={lg.x}
               y2={lg.y}
-              stroke={theme.palette.text.secondary}
-              strokeWidth={1}
+              stroke={gaugeLeagueDash}
+              strokeWidth={isDark ? 1.35 : 1}
               strokeDasharray="4 3"
             />
           )}
@@ -291,13 +324,13 @@ export function BatSpeedGauge({ mph, leagueMph }: { mph: number | null; leagueMp
               y1={cy}
               x2={needleEnd.x}
               y2={needleEnd.y}
-              stroke={theme.palette.warning.main}
+              stroke={isDark ? DIAGRAM_SVG_DARK.warningMain : theme.palette.warning.main}
               strokeWidth={2.5}
               strokeLinecap="round"
             />
           )}
           {/* Pivot cap */}
-          <circle cx={cx} cy={cy} r={5} fill={theme.palette.background.paper} stroke={theme.palette.divider} strokeWidth={1} />
+          <circle cx={cx} cy={cy} r={5} fill={theme.palette.background.paper} stroke={gaugeRimStroke} strokeWidth={1} />
         </svg>
       </Box>
     </MiniCard>
@@ -313,6 +346,7 @@ export function AttackAngleGraphic({
   leagueDeg: number | null;
 }) {
   const theme = useTheme();
+  const isDark = useMuiAppliedDarkMode();
   /** Pivot (`ox`,`oy`): horizontal ref runs left to `refX`; player + league rays use `arrowLen`. */
   const ox = 118;
   const oy = 78;
@@ -331,7 +365,10 @@ export function AttackAngleGraphic({
   const ly = leagueDeg != null ? oy - arrowLen * Math.sin(toRad(leagueDeg)) : null;
 
   const err = theme.palette.error.main;
-  const errFill = theme.palette.mode === 'dark' ? 'rgba(239,83,80,0.2)' : 'rgba(211,47,47,0.12)';
+  const errFill = isDark ? 'rgba(239,83,80,0.2)' : 'rgba(211,47,47,0.12)';
+  /** Match Swing Tilt 0° — SVG literals in dark mode (palette tokens are often CSS vars). */
+  const refStroke = isDark ? DIAGRAM_SVG_DARK.warningMain : DIAGRAM_SVG_LIGHT_INK;
+  const leagueStroke = isDark ? DIAGRAM_SVG_DARK.white : DIAGRAM_SVG_LIGHT_MUTED;
 
   return (
     <MiniCard
@@ -349,7 +386,7 @@ export function AttackAngleGraphic({
     >
       <Box className={styles.attackPlateBox}>
         {/* Degree headline */}
-        <Typography variant="h6" className={styles.gaugeOverlayTitle}>
+        <Typography variant="h6" className={styles.gaugeOverlayTitle} sx={{ color: 'text.primary' }}>
           {playerDeg != null ? `${playerDeg}°` : '—'}
         </Typography>
         <svg
@@ -361,8 +398,15 @@ export function AttackAngleGraphic({
         >
           {/* Wedge between horizontal ref and player ray */}
           {hasPlayer && wedge ? <path d={wedge} fill={errFill} stroke="none" /> : null}
-          {/* Level / 0° reference (left from pivot `ox,oy`) */}
-          <line x1={ox} y1={oy} x2={refX} y2={refY} stroke={theme.palette.text.primary} strokeWidth={2.4} />
+          {/* Level / 0° reference (left from pivot `ox,oy`) — gold in dark mode like Swing Tilt */}
+          <line
+            x1={ox}
+            y1={oy}
+            x2={refX}
+            y2={refY}
+            stroke={refStroke}
+            strokeWidth={isDark ? 1.5 : 2.4}
+          />
           {/* Player attack-angle ray */}
           {hasPlayer && <line x1={ox} y1={oy} x2={px} y2={py} stroke={err} strokeWidth={3} strokeLinecap="round" />}
           {/* League average ray */}
@@ -372,13 +416,20 @@ export function AttackAngleGraphic({
               y1={oy}
               x2={lx}
               y2={ly}
-              stroke={theme.palette.text.secondary}
-              strokeWidth={1.6}
+              stroke={leagueStroke}
+              strokeWidth={isDark ? 1.85 : 1.6}
               strokeDasharray="4 3"
             />
           )}
           {/* Pivot / ball contact */}
-          <circle cx={ox} cy={oy} r={6} fill={theme.palette.warning.light} stroke={theme.palette.warning.dark} strokeWidth={1.2} />
+          <circle
+            cx={ox}
+            cy={oy}
+            r={6}
+            fill={isDark ? DIAGRAM_SVG_DARK.warningLight : theme.palette.warning.light}
+            stroke={isDark ? DIAGRAM_SVG_DARK.warningDark : theme.palette.warning.dark}
+            strokeWidth={1.2}
+          />
         </svg>
       </Box>
     </MiniCard>
@@ -498,6 +549,7 @@ export function AttackDirectionGraphic({
   batterStand?: unknown;
 }) {
   const theme = useTheme();
+  const isDark = useMuiAppliedDarkMode();
   /** Clamp only when a value exists; `0` here would conflate missing with true 0°. */
   const p =
     playerDeg != null && Number.isFinite(Number(playerDeg))
@@ -588,7 +640,10 @@ export function AttackDirectionGraphic({
   const boxH = (boxB0 - boxY0) * yScale;
   const boxY = yB(boxY0);
   const boxB = boxY + boxH;
-  const foulStroke = theme.palette.divider;
+  /** SVG literals in dark mode — `alpha(theme.palette.common.white, …)` becomes invalid `var()` in attributes. */
+  const geomFill = isDark ? DIAGRAM_SVG_DARK.plateFill : theme.palette.action.hover;
+  const geomStroke = isDark ? DIAGRAM_SVG_DARK.plateStroke : theme.palette.divider;
+  const foulStroke = geomStroke;
   const foulOpacity = 0.95;
   const foulDownRun = foulDown0 * yScale;
   const foulDiagDx = foulD0;
@@ -631,7 +686,7 @@ export function AttackDirectionGraphic({
         {/* Pull / oppo captions (field vs catcher in this top-down convention) */}
         <DirectionScaleLabels highlight={highlight} swapSides={stand === 'R'} />
         {/* Attack direction headline ° */}
-        <Typography variant="h6" className={styles.attackDegHeadline}>
+        <Typography variant="h6" className={styles.attackDegHeadline} sx={{ color: 'text.primary' }}>
           {playerDeg != null ? `${playerDeg}°` : '—'}
         </Typography>
         {/* Plate + bat SVG (`vbH` fits ink; inner `<g>` applies `yMargin`) */}
@@ -650,21 +705,21 @@ export function AttackDirectionGraphic({
                 y={boxY}
                 width={boxW}
                 height={boxH}
-                fill={theme.palette.action.hover}
-                stroke={theme.palette.divider}
-                strokeWidth={1}
+                fill={geomFill}
+                stroke={geomStroke}
+                strokeWidth={isDark ? 1.25 : 1}
               />
               <rect
                 x={boxRx}
                 y={boxY}
                 width={boxW}
                 height={boxH}
-                fill={theme.palette.action.hover}
-                stroke={theme.palette.divider}
-                strokeWidth={1}
+                fill={geomFill}
+                stroke={geomStroke}
+                strokeWidth={isDark ? 1.25 : 1}
               />
               {/* Home plate polygon */}
-              <path d={plate} fill={theme.palette.action.hover} stroke={theme.palette.divider} strokeWidth={1} />
+              <path d={plate} fill={geomFill} stroke={geomStroke} strokeWidth={isDark ? 1.25 : 1} />
               {/* Foul-territory tick marks at box corners */}
               <g fill="none" stroke={foulStroke} strokeWidth={1.15} strokeLinecap="square" opacity={foulOpacity}>
                 <line x1={boxLx} y1={boxY} x2={boxLx - foulDiagDx} y2={boxY - foulDiagDy} />
@@ -675,7 +730,7 @@ export function AttackDirectionGraphic({
               {/* Bat: tapered shaft (grip at box midpoint → barrel toward plate) */}
               <path
                 d={taperedBatPathD(bx0, by0d, bx1, by1d)}
-                fill={theme.palette.warning.light}
+                fill={isDark ? DIAGRAM_SVG_DARK.warningLight : theme.palette.warning.light}
                 stroke="none"
               />
               {/* Ball “aim” arrow + ball (white disc at plate crossing) */}
@@ -684,8 +739,8 @@ export function AttackDirectionGraphic({
                 cx={ox}
                 cy={oy - 2}
                 r={3.5}
-                fill={theme.palette.common.white}
-                stroke={theme.palette.divider}
+                fill={isDark ? DIAGRAM_SVG_DARK.white : theme.palette.common.white}
+                stroke={geomStroke}
                 strokeWidth={1}
               />
             </g>
@@ -722,7 +777,9 @@ function swingTiltFigureContent(
   jointFill: string,
   jointStroke: string,
   /** SVG mask id — hides baked-in bat on silhouette raster so only the vector overlay shows the bat. */
-  silhouetteBatMaskId?: string
+  silhouetteBatMaskId?: string,
+  /** Dark mode: e.g. `mixBlendMode` to remove residual light fringe on the raster. */
+  silhouetteImageStyle?: CSSProperties
 ): ReactNode {
   const { figS, hipY, hipX, shoulderY, gripX, gripY, headCx, headCy, headR, neckY, legDown, legSpread } = L;
   const stroke = 2.8 * figS;
@@ -766,6 +823,7 @@ function swingTiltFigureContent(
           preserveAspectRatio="xMaxYMid slice"
           opacity={0.92}
           mask={maskRef}
+          style={silhouetteImageStyle}
         />
       </g>
     );
@@ -956,12 +1014,14 @@ export function SwingTiltGraphic({
   const headR = 6.5 * figS;
   const neckY = headCy + headR * 0.85;
 
-  const accent = theme.palette.warning.main;
-  const accentSoft = theme.palette.mode === 'dark' ? 'rgba(255,167,38,0.22)' : 'rgba(255,152,0,0.18)';
+  const isDark = useMuiAppliedDarkMode();
+  const accent = isDark ? DIAGRAM_SVG_DARK.warningMain : theme.palette.warning.main;
+  const accentSoft = isDark ? 'rgba(255,167,38,0.22)' : 'rgba(255,152,0,0.18)';
   const fig = theme.palette.secondary.main;
-  const jointFill = theme.palette.common.white;
-  const jointStroke =
-    theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.18)';
+  const jointFill = isDark ? DIAGRAM_SVG_DARK.white : theme.palette.common.white;
+  const jointStroke = isDark ? 'rgba(255,255,255,0.38)' : 'rgba(0,0,0,0.18)';
+  const leagueTiltStroke = isDark ? DIAGRAM_SVG_DARK.white : theme.palette.text.secondary;
+  const axisGutterStroke = isDark ? DIAGRAM_SVG_DARK.whiteMuted : theme.palette.divider;
   /** Grey vertical scale inside SVG (gutter side: LHB left `x≈10`, RHB right `x≈vbW-10`). */
   const axisLineX = mirror ? 10 : vbW - 10;
   /** Place the “0°” label on the open side of the plate (same convention as the FLAT/STEEP gutter). */
@@ -1056,13 +1116,17 @@ export function SwingTiltGraphic({
     silhouetteBox,
   };
 
+  const silhouetteImageStyle: CSSProperties | undefined =
+    figureVariant === 'silhouette' && isDark ? { mixBlendMode: 'multiply' } : undefined;
+
   const figureBody = swingTiltFigureContent(
     figureVariant,
     layout,
     fig,
     jointFill,
     jointStroke,
-    figureVariant === 'silhouette' ? silhouetteBatMaskDomId : undefined
+    figureVariant === 'silhouette' ? silhouetteBatMaskDomId : undefined,
+    silhouetteImageStyle
   );
 
   const gTransform = mirror ? `translate(${vbW},0) scale(-1,1)` : undefined;
@@ -1078,7 +1142,7 @@ export function SwingTiltGraphic({
         leagueDeg != null ? (
           <>
             MLB avg:{' '}
-            <Box component="span" className={styles.empWarning}>
+            <Box component="span" className={styles.empPrimary}>
               {leagueDeg}°
             </Box>
           </>
@@ -1091,7 +1155,7 @@ export function SwingTiltGraphic({
           <DirectionScaleLabels highlight="neutral" swapSides={false} />
         </Box>
         {/* Swing tilt headline ° */}
-        <Typography variant="h6" className={styles.attackDegHeadline}>
+        <Typography variant="h6" className={styles.attackDegHeadline} sx={{ color: 'text.primary' }}>
           {tiltDeg != null ? `${tiltDeg}°` : '—'}
         </Typography>
         {/* FLAT/STEEP gutter + chart row (`row`: LHB labels left of SVG; `row-reverse`: RHB labels right of SVG) */}
@@ -1141,7 +1205,7 @@ export function SwingTiltGraphic({
               y1={vbMinY + 16}
               x2={axisLineX}
               y2={vbMaxY - 8}
-              stroke={theme.palette.divider}
+              stroke={axisGutterStroke}
               strokeWidth={1}
             />
             {/* Horizontal 0° reference (`plate0LineY`); segment `cxPlate ± 28`. Theme warning (orange). Outside mirror so plate stays fixed for LHB/RHB. */}
@@ -1175,8 +1239,8 @@ export function SwingTiltGraphic({
                   y1={gripY}
                   x2={lbx}
                   y2={lby}
-                  stroke={theme.palette.text.secondary}
-                  strokeWidth={1.2}
+                  stroke={leagueTiltStroke}
+                  strokeWidth={isDark ? 1.45 : 1.2}
                   strokeDasharray="4 3"
                 />
               )}
@@ -1184,7 +1248,7 @@ export function SwingTiltGraphic({
               {hasTilt && (
                 <path
                   d={taperedBatPathD(gripX, gripY, bx, by)}
-                  fill={theme.palette.warning.light}
+                  fill={isDark ? DIAGRAM_SVG_DARK.warningLight : theme.palette.warning.light}
                   stroke="none"
                 />
               )}

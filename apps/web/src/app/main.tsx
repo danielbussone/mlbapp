@@ -1,6 +1,7 @@
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import CssBaseline from '@mui/material/CssBaseline';
+import InitColorSchemeScript from '@mui/material/InitColorSchemeScript';
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
@@ -12,6 +13,9 @@ import { queryClient } from '@/api/queryClient.js';
 import { App } from './App.js';
 import { AppRouteErrorFallback } from './AppRouteErrorFallback.js';
 import { appTheme } from './theme.js';
+
+const MODE_STORAGE_KEY = 'mlbapp-mode';
+const COLOR_SCHEME_STORAGE_KEY = 'mlbapp-color-scheme';
 
 const CompareCareerPage = lazy(() =>
   import('@/pages/CompareCareerPage.js').then((m) => ({ default: m.CompareCareerPage })),
@@ -58,7 +62,17 @@ function RouteFallback() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={appTheme}>
+      <InitColorSchemeScript
+        defaultMode="system"
+        modeStorageKey={MODE_STORAGE_KEY}
+        colorSchemeStorageKey={COLOR_SCHEME_STORAGE_KEY}
+      />
+      <ThemeProvider
+        theme={appTheme}
+        defaultMode="system"
+        modeStorageKey={MODE_STORAGE_KEY}
+        colorSchemeStorageKey={COLOR_SCHEME_STORAGE_KEY}
+      >
         <CssBaseline />
         <BrowserRouter>
           <ErrorBoundary FallbackComponent={AppRouteErrorFallback}>

@@ -4,7 +4,23 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
+
+
+def normalize_cli_argv(argv: list[str] | None) -> list[str]:
+    """Prepare argv for ``argparse`` after npm/pnpm ``run`` forwarding.
+
+    Removes standalone ``--`` tokens. pnpm often injects ``--`` before extra script
+    arguments (``pnpm run x -- --season 2026``). When the npm script already
+    contains fixed flags (e.g. ``--feed infield``), that delimiter can appear
+    **mid-argv**, which plain argparse rejects unless stripped.
+    """
+    if argv is None:
+        out = sys.argv[1:]
+    else:
+        out = list(argv)
+    return [a for a in out if a != "--"]
 
 _EXPORT_PREFIX = re.compile(r"^export\s+", re.IGNORECASE)
 

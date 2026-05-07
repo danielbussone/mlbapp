@@ -23,6 +23,7 @@
     "etl:sprint": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.sprint_running",
     "etl:fielding-oaa": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fielding_oaa_cell",
     "etl:fielding-oaa-if": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fielding_oaa_cell --feed infield",
+    "etl:season-refresh": "bash scripts/run-season-etl-refresh.sh",
     "chat:checklist": "bash scripts/validate-chat-checklist.sh",
     "test:shared": "pnpm --filter @mlbapp/shared test"
   },

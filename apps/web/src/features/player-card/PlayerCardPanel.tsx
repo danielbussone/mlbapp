@@ -25,7 +25,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { useTheme } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { RailCollapsibleSection } from '@/components/rail/RailCollapsibleSection.js';
 import { Link } from 'react-router-dom';
@@ -35,6 +35,7 @@ import {
   type FgBattingCardApi,
   battingCardLinesFromCareerViews,
   fgCardHasAnyRows,
+  fgCardSeasonLabelToYear,
   fgCardSeasonRowIsSelected,
   fgSeasonHasConsolidatedRow,
   formatBattingCardCell,
@@ -63,6 +64,7 @@ import { PitchMixVeloTable } from '@/features/pitch-mix/PitchMixVeloTable.js';
 import { LeaguePercentilesPanel } from '@/features/league-percentiles/LeaguePercentilesPanel.js';
 import { ScoutingToolsPrototype } from '@/features/scouting-tools/ScoutingToolsPrototype.js';
 import { JawsExpandedBlock } from '@/features/player-card/JawsExpandedBlock.js';
+import { useMuiAppliedDarkMode } from '@/hooks/useMuiAppliedDarkMode.js';
 import type { StatcastJsonRow, StatcastSummaryPayload } from '@/lib/statcastSummaryPayload.js';
 import fgTableShell from '@/styles/fgTableShell.module.css';
 import styles from './PlayerCardPanel.module.css';
@@ -359,11 +361,14 @@ function BattingCardTable({
   lines,
   variant,
   selectedSeason,
+  onSeasonSelect,
 }: {
   lines: BattingCardLine[];
   variant: 'page' | 'sidebar';
   /** When set, the matching MLB season row is subtly highlighted (not Career). */
   selectedSeason?: number;
+  /** When set, clicking a season row (not Career) updates the card season. */
+  onSeasonSelect?: (year: number) => void;
 }) {
   if (lines.length === 0) return null;
   return (
@@ -391,19 +396,36 @@ function BattingCardTable({
         <TableBody>
           {lines.map((line) => {
             const selected = fgCardSeasonRowIsSelected(line.seasonLabel, selectedSeason);
+            const rowYear = fgCardSeasonLabelToYear(line.seasonLabel);
+            const clickable = rowYear !== undefined && onSeasonSelect != null;
             return (
               <TableRow
                 key={line.seasonLabel}
-                sx={
-                  selected
+                hover={clickable}
+                onClick={clickable ? () => onSeasonSelect(rowYear) : undefined}
+                onKeyDown={
+                  clickable
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSeasonSelect(rowYear);
+                        }
+                      }
+                    : undefined
+                }
+                tabIndex={clickable ? 0 : undefined}
+                aria-label={clickable ? `Select season ${rowYear}` : undefined}
+                sx={{
+                  ...(selected
                     ? {
                         bgcolor: 'action.selected',
                         borderLeft: 3,
                         borderLeftColor: 'primary.main',
                         '& .MuiTableCell-root': { fontWeight: 600 },
                       }
-                    : undefined
-                }
+                    : {}),
+                  ...(clickable ? { cursor: 'pointer' } : {}),
+                }}
               >
                 <TableCell
                   component="th"
@@ -493,6 +515,7 @@ export function PlayerCardPanel({
   const fgPitchingCard = fgPitFromQ ?? EMPTY_FG_BATTING_CARD;
 
   const theme = useTheme();
+  const isAppliedDark = useMuiAppliedDarkMode();
   const isMdUp = useMediaQuery(theme.breakpoints.up('md'));
   const isWidePageViewport = useMediaQuery('(min-width:1440px)');
   /** Page mode only: Bio | plots | percentile rail */
@@ -748,7 +771,7 @@ export function PlayerCardPanel({
       gap={1}
     >
       {variant === 'page' ? (
-        <Button component={Link} to="/" variant="text" size="small">
+        <Button component={Link} to="/" variant="text" size="small" color="primary">
           ← Chat
         </Button>
       ) : (
@@ -1075,17 +1098,42 @@ export function PlayerCardPanel({
                       <Tooltip
                         title={`Position & team: FanGraphs (${season}) when available; MLB current roster when not.`}
                       >
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          sx={
-                            teamPrimaryHex && headerFgMeta.team
-                              ? { color: teamPrimaryHex, fontWeight: 600 }
-                              : undefined
-                          }
-                        >
-                          {posTeam}
-                        </Typography>
+                        {isAppliedDark && teamPrimaryHex && headerFgMeta.team ? (
+                          <Chip
+                            size="small"
+                            label={posTeam}
+                            sx={{
+                              height: 'auto',
+                              alignSelf: 'flex-start',
+                              maxWidth: '100%',
+                              bgcolor: alpha(theme.palette.common.white, 0.75),
+                              border: '1px solid',
+                              borderColor: 'divider',
+                              '& .MuiChip-label': {
+                                display: 'block',
+                                whiteSpace: 'normal',
+                                px: 1,
+                                py: 0.375,
+                                fontSize: theme.typography.body2.fontSize,
+                                lineHeight: 1.35,
+                                fontWeight: 600,
+                                color: teamPrimaryHex,
+                              },
+                            }}
+                          />
+                        ) : (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            sx={
+                              teamPrimaryHex && headerFgMeta.team
+                                ? { color: teamPrimaryHex, fontWeight: 600 }
+                                : undefined
+                            }
+                          >
+                            {posTeam}
+                          </Typography>
+                        )}
                       </Tooltip>
                     )}
                     {phys != null && phys !== '' && (
@@ -1167,6 +1215,7 @@ export function PlayerCardPanel({
                       rows={fieldingHistoryRows}
                       primaryPositionDisplay={headerFgMeta.position}
                       selectedSeason={season}
+                      onSeasonSelect={setSeason}
                     />
                   )}
                 </>
@@ -1192,7 +1241,12 @@ export function PlayerCardPanel({
                         <Typography variant="subtitle2" className={styles.sectionSubtitleGrouped}>
                           By season (MLB)
                         </Typography>
-                        <BattingCardTable lines={battingCard.lastSeasons} variant={variant} selectedSeason={season} />
+                        <BattingCardTable
+                          lines={battingCard.lastSeasons}
+                          variant={variant}
+                          selectedSeason={season}
+                          onSeasonSelect={setSeason}
+                        />
                       </>
                     ) : (
                       <Typography variant="caption" color="text.secondary">
@@ -1208,7 +1262,12 @@ export function PlayerCardPanel({
                       <Typography variant="subtitle2" className={styles.sectionSubtitleGrouped}>
                         By season (MLB)
                       </Typography>
-                      <PitchingCardTable lines={pitchingCard.lastSeasons} variant={variant} selectedSeason={season} />
+                      <PitchingCardTable
+                        lines={pitchingCard.lastSeasons}
+                        variant={variant}
+                        selectedSeason={season}
+                        onSeasonSelect={setSeason}
+                      />
                     </>
                   ) : (
                     <Typography variant="caption" color="text.secondary">

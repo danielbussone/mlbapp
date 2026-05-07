@@ -26,7 +26,7 @@ import pandas as pd
 import psycopg
 import requests
 
-from mlbapp_etl.runtime import load_repo_dotenv
+from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
 
 # GitHub removed / renamed ``chadwickbureau/baseballdatabank``; pybaseball's Lahman zip URL returns 404.
 # This archive capture contains ``baseballdatabank-master/core/HallOfFame.csv`` (Lahman-compatible columns).
@@ -34,16 +34,6 @@ _DEFAULT_BASEBALL_DATABANK_ZIP_URL = (
     "https://web.archive.org/web/20220128170417if_/"
     "https://github.com/chadwickbureau/baseballdatabank/archive/master.zip"
 )
-
-
-def normalize_cli_argv(argv: list[str] | None) -> list[str]:
-    if argv is None:
-        out = sys.argv[1:]
-    else:
-        out = list(argv)
-    while out and out[0] == "--":
-        out = out[1:]
-    return out
 
 
 def _repo_root() -> Path:

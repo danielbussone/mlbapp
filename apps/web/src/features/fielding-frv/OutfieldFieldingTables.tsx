@@ -12,7 +12,7 @@ import TableRow from '@mui/material/TableRow';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
-import { fgCardSeasonRowIsSelected } from '@/lib/batterFgTables.js';
+import { fgCardSeasonLabelToYear, fgCardSeasonRowIsSelected } from '@/lib/batterFgTables.js';
 import {
   buildFieldingCareerAndSeasons,
   buildFieldingCareerExpanded,
@@ -45,6 +45,7 @@ function FieldingRollupTable({
   expandedRollupLayout = false,
   selectedSeason,
   seasonHighlight = false,
+  onSeasonSelect,
 }: {
   lines: FieldingAggLine[];
   /** When true, rows with Pos = All are rollups; following rows are indented (per-position breakdown). */
@@ -53,6 +54,8 @@ function FieldingRollupTable({
   selectedSeason?: number;
   /** `aggregated`: highlight one row per season; `by-position-all`: highlight that season's Pos = All row. */
   seasonHighlight?: false | 'aggregated' | 'by-position-all';
+  /** When set, clicking a season row (not Career) updates the card season. */
+  onSeasonSelect?: (year: number) => void;
 }) {
   if (lines.length === 0) return null;
   return (
@@ -78,9 +81,25 @@ function FieldingRollupTable({
           const rollupStrong =
             r.key === 'career' || (expandedRollupLayout && r.position === 'All') ? 600 : 400;
           const selected = fieldingSeasonRowHighlighted(r, selectedSeason, seasonHighlight);
+          const rowYear = fgCardSeasonLabelToYear(r.seasonLabel);
+          const clickable = rowYear !== undefined && onSeasonSelect != null;
           return (
             <TableRow
               key={r.key}
+              hover={clickable}
+              onClick={clickable ? () => onSeasonSelect(rowYear) : undefined}
+              onKeyDown={
+                clickable
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSeasonSelect(rowYear);
+                      }
+                    }
+                  : undefined
+              }
+              tabIndex={clickable ? 0 : undefined}
+              aria-label={clickable ? `Select season ${rowYear}` : undefined}
               sx={{
                 fontWeight: selected ? 600 : rollupStrong,
                 ...(selected
@@ -91,6 +110,7 @@ function FieldingRollupTable({
                       '& .MuiTableCell-root': { fontWeight: 600 },
                     }
                   : {}),
+                ...(clickable ? { cursor: 'pointer' } : {}),
               }}
             >
               <TableCell
@@ -123,12 +143,15 @@ export function OutfieldFieldingTables({
   rows,
   primaryPositionDisplay = null,
   selectedSeason,
+  onSeasonSelect,
 }: {
   rows: Record<string, unknown>[];
   /** FanGraphs season primary (`position_display` on batting/pitching season row), e.g. CF or DH/OF. */
   primaryPositionDisplay?: string | null;
   /** Matches the player card season selector for row highlight (By season table only). */
   selectedSeason?: number;
+  /** Updates card season when a By season row is activated (not Career). */
+  onSeasonSelect?: (year: number) => void;
 }) {
   const [primaryOnly, setPrimaryOnly] = useState(false);
   /** Shared layout for the Career block and the By season block. */
@@ -251,6 +274,7 @@ export function OutfieldFieldingTables({
         expandedRollupLayout={rollupView === 'byPosition'}
         selectedSeason={selectedSeason}
         seasonHighlight={rollupView === 'aggregated' ? 'aggregated' : 'by-position-all'}
+        onSeasonSelect={onSeasonSelect}
       />
     </>
   );

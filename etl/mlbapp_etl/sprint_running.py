@@ -24,22 +24,12 @@ from psycopg.types.json import Json
 
 from mlbapp_etl.columns import as_int, as_numeric, as_smallint, pick
 from mlbapp_etl.jsonutil import row_to_stats_json
-from mlbapp_etl.runtime import load_repo_dotenv
+from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
 from mlbapp_etl.statcast import _retry_fetch, _sleep_throttle
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def normalize_cli_argv(argv: list[str] | None) -> list[str]:
-    if argv is None:
-        out = sys.argv[1:]
-    else:
-        out = list(argv)
-    while out and out[0] == "--":
-        out = out[1:]
-    return out
 
 
 def _strip_df_columns(df: pd.DataFrame) -> pd.DataFrame:

@@ -11,6 +11,14 @@ Writes one ``ingest_snapshot`` row per run with ``source`` ``chadwick_register``
 and version metadata in ``params`` (zip URL/ref, row counts, optional
 ``artifact_sha256``).
 
+**Incremental mode** (``--incremental``): Chadwick does not publish a delta feed;
+the full zip is still downloaded and parsed. After that, only rows that are
+**new** ``key_uuid`` values in ``dim_player``, or rows whose register
+``key_mlbam`` **differs** from the stored ``dim_player.key_mlbam``, are upserted.
+That cuts DB time for routine refreshes (new debuts and MLBAM backfills). It
+does **not** pick up crosswalk-only edits (e.g. new FanGraphs id with the same
+MLBAM); run a full load occasionally for that.
+
 Environment: ``DATABASE_URL`` unless ``--dry-run``. Repo-root ``.env`` is read
 via ``mlbapp_etl.runtime.load_repo_dotenv`` (same pattern as FanGraphs ETL).
 """
@@ -35,7 +43,7 @@ import psycopg.errors
 import requests
 
 from mlbapp_etl.columns import as_int, as_text
-from mlbapp_etl.runtime import load_repo_dotenv
+from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
 
 _PEOPLE_FILE_PATTERN = re.compile(r"register[^/]+/data/people[^/]+\.csv$")
 
@@ -64,17 +72,6 @@ _MANAGED_ID_SYSTEMS = frozenset(
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def normalize_cli_argv(argv: list[str] | None) -> list[str]:
-    """Drop leading ``--`` tokens (pnpm/npm pass them through to the script)."""
-    if argv is None:
-        out = sys.argv[1:]
-    else:
-        out = list(argv)
-    while out and out[0] == "--":
-        out = out[1:]
-    return out
 
 
 def _extract_people_frames(zip_archive: zipfile.ZipFile) -> list[pd.DataFrame]:
@@ -241,6 +238,47 @@ ON CONFLICT (id_system, id_value) DO UPDATE SET
 """
 
 
+def _fetch_dim_uuid_mlbam(cur: Any) -> dict[str, int | None]:
+    """Map ``key_uuid`` (text) → ``key_mlbam`` for incremental filtering."""
+    cur.execute("SELECT key_uuid::text, key_mlbam FROM dim_player")
+    out: dict[str, int | None] = {}
+    for ku, mlb in cur.fetchall():
+        mid: int | None
+        if mlb is None:
+            mid = None
+        else:
+            mid = int(mlb)
+        out[str(ku)] = mid
+    return out
+
+
+def filter_chadwick_incremental(
+    dim_input: list[dict[str, Any]],
+    existing_uuid_to_mlbam: dict[str, int | None],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Keep register rows that need an upsert: new UUID or changed ``key_mlbam``."""
+    selected: list[dict[str, Any]] = []
+    new_uuids = 0
+    mlbam_changes = 0
+    for rec in dim_input:
+        ku = rec["key_uuid"]
+        reg_mlb = rec.get("key_mlbam")
+        if ku not in existing_uuid_to_mlbam:
+            selected.append(rec)
+            new_uuids += 1
+            continue
+        old_mlb = existing_uuid_to_mlbam[ku]
+        if reg_mlb is not None and old_mlb != reg_mlb:
+            selected.append(rec)
+            mlbam_changes += 1
+    stats = {
+        "new_key_uuid_rows": new_uuids,
+        "key_mlbam_change_rows": mlbam_changes,
+        "skipped_unchanged_rows": len(dim_input) - len(selected),
+    }
+    return selected, stats
+
+
 def _upsert_dim_player(cur: Any, rec: dict[str, Any]) -> int | None:
     params = {
         "key_uuid": rec["key_uuid"],
@@ -273,6 +311,7 @@ def run_chadwick_etl(
     dry_run: bool,
     notes: str | None,
     chunk_size: int,
+    incremental: bool,
 ) -> dict[str, Any] | None:
     if register_zip_bytes is None:
         register_zip_bytes = fetch_register_zip(register_zip_url)
@@ -286,7 +325,24 @@ def run_chadwick_etl(
         "artifact_sha256": artifact_sha256,
         "register_row_count": int(len(df.index)),
         "dim_row_count": len(dim_input),
+        "incremental": incremental,
     }
+
+    work_rows = dim_input
+    if incremental:
+        if not dsn and dry_run:
+            print(
+                "DATABASE_URL is required for --incremental --dry-run "
+                "(need dim_player to compute the row filter).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                existing = _fetch_dim_uuid_mlbam(cur)
+        work_rows, inc_stats = filter_chadwick_incremental(dim_input, existing)
+        params_obj["incremental_stats"] = inc_stats
+        params_obj["upsert_row_count"] = len(work_rows)
 
     if dry_run:
         print(
@@ -295,6 +351,7 @@ def run_chadwick_etl(
                     "dry_run": True,
                     "register_row_count": len(df.index),
                     "dim_row_count": len(dim_input),
+                    "upsert_row_count": len(work_rows),
                     "params": params_obj,
                 },
                 indent=2,
@@ -317,13 +374,13 @@ def run_chadwick_etl(
                     str(snapshot_id),
                     "chadwick_register",
                     json.dumps(params_obj),
-                    len(dim_input),
+                    len(work_rows),
                     notes,
                 ),
             )
 
-            for i in range(0, len(dim_input), chunk_size):
-                chunk = dim_input[i : i + chunk_size]
+            for i in range(0, len(work_rows), chunk_size):
+                chunk = work_rows[i : i + chunk_size]
                 for rec in chunk:
                     extras = {k: rec[k] for k in _ID_SYSTEM_BY_COLUMN.values() if k in rec}
                     pid = _upsert_dim_player(cur, rec)
@@ -356,6 +413,7 @@ def run_chadwick_etl(
         "source": "chadwick_register",
         "register_row_count": len(df.index),
         "dim_row_count": len(dim_input),
+        "upsert_row_count": len(work_rows),
         "external_id_deleted_rows": deleted_maps,
         "external_id_inserted_rows": inserted_maps,
         "params": params_obj,
@@ -391,6 +449,14 @@ def main(argv: list[str] | None = None) -> None:
         default=int(os.environ.get("MLBAPP_CHADWICK_CHUNK_SIZE", "2000")),
         help="Rows per DB transaction chunk (default 2000).",
     )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help=(
+            "After loading the full register, upsert only new key_uuid rows or rows whose "
+            "key_mlbam changed vs dim_player (faster DB; still downloads full zip)."
+        ),
+    )
     parser.add_argument("--notes", default=None)
     ns = parser.parse_args(argv)
 
@@ -399,9 +465,9 @@ def main(argv: list[str] | None = None) -> None:
     zip_bytes: bytes | None = None
     if ns.register_zip_file:
         zip_bytes = Path(ns.register_zip_file).expanduser().read_bytes()
-    if not dsn and not ns.dry_run:
+    if not dsn and (not ns.dry_run or ns.incremental):
         print(
-            "DATABASE_URL is required unless --dry-run "
+            "DATABASE_URL is required unless --dry-run without --incremental "
             "(set in the environment or in .env at the repo root).",
             file=sys.stderr,
         )
@@ -415,6 +481,7 @@ def main(argv: list[str] | None = None) -> None:
             dry_run=ns.dry_run,
             notes=ns.notes,
             chunk_size=max(1, ns.chunk_size),
+            incremental=ns.incremental,
         )
     except requests.HTTPError as exc:
         print("Chadwick register HTTP error:", exc, file=sys.stderr)

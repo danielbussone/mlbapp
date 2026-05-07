@@ -3,11 +3,7 @@
  * See plan: scouting 20-80 tools (Phase 0).
  */
 
-import type {
-  LeaguePercentilesResponse,
-  PercentileDirection,
-  PercentileSlot,
-} from '@/features/league-percentiles/leaguePercentilesTypes.js';
+import type { PercentileDirection, PercentileSlot } from '@/features/league-percentiles/leaguePercentilesTypes.js';
 import { mergePercentileSlotsForRole } from '@/features/league-percentiles/mergePercentileSlotsForRole.js';
 import { goodnessDisplayPercentile } from '@/features/league-percentiles/percentileGoodnessColor.js';
 

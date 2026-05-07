@@ -36,21 +36,11 @@ from psycopg.types.json import Json
 
 from mlbapp_etl.columns import as_int, as_numeric, as_smallint, as_text, pick
 from mlbapp_etl.jsonutil import json_safe
-from mlbapp_etl.runtime import load_repo_dotenv
+from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def normalize_cli_argv(argv: list[str] | None) -> list[str]:
-    if argv is None:
-        out = sys.argv[1:]
-    else:
-        out = list(argv)
-    while out and out[0] == "--":
-        out = out[1:]
-    return out
 
 
 # Savant column names → first-class DB columns (remainder → payload_jsonb).

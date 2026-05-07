@@ -86,6 +86,13 @@ export function fgCardSeasonRowIsSelected(seasonLabel: string, selectedSeason: n
   return Number.isFinite(y) && y === selectedSeason;
 }
 
+/** Calendar season year for clickable FanGraphs card rows; undefined for Career or invalid labels. */
+export function fgCardSeasonLabelToYear(seasonLabel: string): number | undefined {
+  if (seasonLabel === 'Career') return undefined;
+  const y = Number(seasonLabel);
+  return Number.isFinite(y) ? y : undefined;
+}
+
 function num(v: unknown): number | null {
   if (v == null || v === '') return null;
   const n = typeof v === 'number' ? v : Number(v);

@@ -10,6 +10,7 @@ import pandas as pd
 from mlbapp_etl.chadwick import (
     _clear_ambiguous_mlbam,
     build_dim_rows,
+    filter_chadwick_incremental,
     load_register_from_zip_bytes,
 )
 
@@ -69,7 +70,38 @@ def test_clear_ambiguous_mlbam_nulls_dupes() -> None:
     assert pd.isna(out.loc[1, "key_mlbam"])
 
 
+def test_filter_chadwick_incremental_new_uuid_only() -> None:
+    dim = [
+        {"key_uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "key_mlbam": 1},
+        {"key_uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "key_mlbam": 2},
+    ]
+    existing = {"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa": 1}
+    rows, stats = filter_chadwick_incremental(dim, existing)
+    assert len(rows) == 1
+    assert rows[0]["key_uuid"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    assert stats["new_key_uuid_rows"] == 1
+    assert stats["key_mlbam_change_rows"] == 0
+    assert stats["skipped_unchanged_rows"] == 1
+
+
+def test_filter_chadwick_incremental_mlbam_backfill() -> None:
+    dim = [{"key_uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "key_mlbam": 660271}]
+    existing = {"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa": None}
+    rows, stats = filter_chadwick_incremental(dim, existing)
+    assert rows == dim
+    assert stats["key_mlbam_change_rows"] == 1
+    assert stats["new_key_uuid_rows"] == 0
+
+
+def test_filter_chadwick_incremental_skips_unchanged_mlbam() -> None:
+    dim = [{"key_uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "key_mlbam": 660271}]
+    existing = {"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa": 660271}
+    rows, stats = filter_chadwick_incremental(dim, existing)
+    assert rows == []
+    assert stats["skipped_unchanged_rows"] == 1
+
+
 def test_normalize_cli_argv_importable() -> None:
-    from mlbapp_etl.chadwick import normalize_cli_argv
+    from mlbapp_etl.runtime import normalize_cli_argv
 
     assert normalize_cli_argv(["--", "--dry-run"]) == ["--dry-run"]

@@ -85,7 +85,9 @@
 
 .gridCellLeft {
   min-width: 0;
-  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  border-color: var(--mui-palette-divider);
+  /* Bio + FG stats tables read on paper against the teal page canvas */
+  background-color: var(--mui-palette-background-paper);
 }
 
 @media (min-width: 900px) {
@@ -160,10 +162,11 @@
   background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
 }
 
-/* Middle column (plots/tables — wide page Statcast pane). Default paper/no tint. */
+/* Middle column (plots/tables — wide page Statcast pane). Same tint as percentiles rail for consistent borders. */
 .gridCellStatcastPlots {
   min-width: 0;
-  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  border-color: var(--mui-palette-divider);
+  background-color: var(--mui-palette-action-hover);
 }
 
 @media (min-width: 1440px) {
@@ -176,7 +179,8 @@
 /* Right column rail (percentile sliders — subtle background). */
 .gridCellPercentilesRail {
   min-width: 0;
-  background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--mui-palette-divider);
+  background-color: var(--mui-palette-action-hover);
 }
 
 .statcastHeaderRow {

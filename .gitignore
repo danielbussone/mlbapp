@@ -59,4 +59,5 @@ docs/samples/*.csv
 docs/samples/*.parquet
 .pybaseball-cache
 .venv-etl
+.venv-img
 etl/.venv

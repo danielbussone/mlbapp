@@ -1,7 +1,35 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { useId, useMemo } from 'react';
+import { useMuiAppliedDarkMode } from '@/hooks/useMuiAppliedDarkMode.js';
 import styles from './MovementMiniPlot.module.css';
+
+/** SVG presentation colors — literals so dark appearance matches applied scheme, not lagging `theme.palette.mode`. */
+const MOVEMENT_PLOT_LIGHT = {
+  bg: '#fafafa',
+  border: '#e0e0e0',
+  ring: '#bdbdbd',
+  axis: '#9e9e9e',
+  armFill: 'rgba(66, 66, 66, 0.12)',
+  armStroke: '#424242',
+  armLine: '#212121',
+  /** League-avg markers: white “baseball” fill + hash stitching (same in both modes). */
+  leagueBallFill: '#ffffff',
+  leagueBallStitch: '#757575',
+} as const;
+
+const MOVEMENT_PLOT_DARK = {
+  /** Inset chart well: near `background.paper`, slightly deeper than rail wash. */
+  bg: 'rgb(22, 38, 41)',
+  border: 'rgba(255, 255, 255, 0.12)',
+  ring: 'rgba(255, 255, 255, 0.22)',
+  axis: 'rgba(255, 255, 255, 0.38)',
+  armFill: 'rgba(255, 255, 255, 0.1)',
+  armStroke: 'rgba(255, 255, 255, 0.35)',
+  armLine: 'rgba(255, 255, 255, 0.9)',
+  leagueBallFill: '#ffffff',
+  leagueBallStitch: '#757575',
+} as const;
 
 type Point = { x: number; y: number; pitchType: string };
 
@@ -86,6 +114,8 @@ export function MovementMiniPlot({
   /** Optional arm-slot direction overlay from release_pos_x/z sample. */
   armAngle?: ArmAngleOverlay | null;
 }) {
+  const isDark = useMuiAppliedDarkMode();
+  const ink = isDark ? MOVEMENT_PLOT_DARK : MOVEMENT_PLOT_LIGHT;
   const clipUid = useId().replace(/:/g, '');
   const pts = useMemo(() => {
     const out: Point[] = [];
@@ -179,10 +209,11 @@ export function MovementMiniPlot({
               <rect x={0} y={0} width={vb} height={vb} />
             </clipPath>
             <pattern id={`${clipUid}-hash`} patternUnits="userSpaceOnUse" width={3} height={3}>
-              <path d="M0,3 L3,0 M-1,1 L2,-2" stroke="#757575" strokeWidth={0.35} />
+              <rect width={3} height={3} fill={ink.leagueBallFill} />
+              <path d="M0,3 L3,0 M-1,1 L2,-2" stroke={ink.leagueBallStitch} strokeWidth={0.35} />
             </pattern>
           </defs>
-          <rect x={0} y={0} width={vb} height={vb} fill="#fafafa" stroke="#e0e0e0" />
+          <rect x={0} y={0} width={vb} height={vb} fill={ink.bg} stroke={ink.border} />
           <g clipPath={`url(#${clipUid})`}>
             {MOVEMENT_RING_IN.map((rin) => {
               const r = ringR(rin);
@@ -194,7 +225,7 @@ export function MovementMiniPlot({
                   cy={cy0}
                   r={r}
                   fill="none"
-                  stroke="#bdbdbd"
+                  stroke={ink.ring}
                   strokeWidth={isOuter ? 0.45 : 0.28}
                   strokeDasharray={isOuter ? undefined : '1.6 1.4'}
                   opacity={isOuter ? 1 : 0.85}
@@ -206,7 +237,7 @@ export function MovementMiniPlot({
               y1={0}
               x2={toSvgX(0)}
               y2={vb}
-              stroke="#9e9e9e"
+              stroke={ink.axis}
               strokeWidth={0.35}
               strokeDasharray="2 1.5"
               opacity={0.95}
@@ -216,7 +247,7 @@ export function MovementMiniPlot({
               y1={toSvgY(0)}
               x2={vb}
               y2={toSvgY(0)}
-              stroke="#9e9e9e"
+              stroke={ink.axis}
               strokeWidth={0.35}
               strokeDasharray="2 1.5"
               opacity={0.95}
@@ -224,8 +255,8 @@ export function MovementMiniPlot({
             {armWedge && (
               <path
                 d={`M ${cx0} ${cy0} L ${toSvgX(armWedge.x1)} ${toSvgY(armWedge.y1)} L ${toSvgX(armWedge.x2)} ${toSvgY(armWedge.y2)} Z`}
-                fill="rgba(66, 66, 66, 0.12)"
-                stroke="#424242"
+                fill={ink.armFill}
+                stroke={ink.armStroke}
                 strokeWidth={0.35}
               />
             )}
@@ -235,7 +266,7 @@ export function MovementMiniPlot({
                 y1={cy0}
                 x2={toSvgX(armWedge.xm)}
                 y2={toSvgY(armWedge.ym)}
-                stroke="#212121"
+                stroke={ink.armLine}
                 strokeWidth={0.55}
               />
             )}
