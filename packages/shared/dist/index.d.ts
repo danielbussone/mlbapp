@@ -95,4 +95,5 @@ export declare const errorEventDataSchema: z.ZodObject<{
 export type ErrorEventData = z.infer<typeof errorEventDataSchema>;
 export { leaderboardAttachmentSchema, leaderboardColumnSchema, leaderboardEventDataSchema, leaderboardProvenanceSchema, type LeaderboardAttachment, type LeaderboardColumn, type LeaderboardEventData, type LeaderboardProvenance, } from './leaderboard.js';
 export { thinkingEventDataSchema, type ThinkingEventData } from './chatThinking.js';
+export { SPEED_ANGLE_COLORS, SPEED_ANGLE_LABELS, speedAngleCode, type SpeedAngleCode, } from './speedAngleCode.js';
 //# sourceMappingURL=index.d.ts.map

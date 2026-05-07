@@ -1,3 +1,8 @@
+import {
+  SPEED_ANGLE_LABELS,
+  speedAngleCode,
+  type SpeedAngleCode,
+} from '@mlbapp/shared';
 import type pg from 'pg';
 import { rowToJson, rowsToJson } from './rowJson.js';
 
@@ -16,6 +21,152 @@ export const STATCAST_BAT_TRACKING_JSON_KEYS = {
 const MAX_SAMPLE_PITCHER = 200;
 /** Batter spray / batted-ball pulls can be much larger (all chartable BIP with hc_x/hc_y). */
 const MAX_SAMPLE_BATTER = 12_000;
+/** Safety cap when loading EV/LA rows for Tango contact classification (per batter-season). */
+const MAX_BATTER_EV_LA_FETCH = 50_000;
+/** Max scatter points returned on `batted_ball.contact_points` (bucket % use full classified set). */
+const CONTACT_POINTS_RETURN_CAP = 8000;
+/** Cohort floor for Tango bucket league percentiles (same spirit as Savant BIP MV). */
+const TANGO_BUCKET_PERCENTILE_BBE_FLOOR = 50;
+
+/**
+ * Tango Tiger SpeedAngle classification in SQL — must match `speedAngleCode` in @mlbapp/shared.
+ * Uses `launch_speed` / `launch_angle` from statcast_pitch (double precision).
+ */
+const TANGO_CODE_SQL = `
+  CASE
+    WHEN (launch_speed::double precision * 1.5 - launch_angle::double precision) >= 117
+      AND (launch_speed::double precision + launch_angle::double precision) >= 124
+      AND launch_speed::double precision >= 98
+      AND launch_angle::double precision >= 4 AND launch_angle::double precision <= 50
+    THEN 6
+    WHEN (launch_speed::double precision * 1.5 - launch_angle::double precision) >= 111
+      AND (launch_speed::double precision + launch_angle::double precision) >= 119
+      AND launch_speed::double precision >= 95
+      AND launch_angle::double precision >= 0 AND launch_angle::double precision <= 52
+    THEN 5
+    WHEN launch_speed::double precision <= 59
+    THEN 1
+    WHEN (launch_speed::double precision * 2 - launch_angle::double precision) >= 87
+      AND launch_angle::double precision <= 41
+      AND (launch_speed::double precision * 2 + launch_angle::double precision) <= 175
+      AND (launch_speed::double precision + launch_angle::double precision * 1.3) >= 89
+      AND launch_speed::double precision >= 59 AND launch_speed::double precision <= 72
+    THEN 4
+    WHEN (launch_speed::double precision + launch_angle::double precision * 1.3) <= 112
+      AND (launch_speed::double precision + launch_angle::double precision * 1.55) >= 92
+      AND launch_speed::double precision >= 72 AND launch_speed::double precision <= 86
+    THEN 4
+    WHEN launch_angle::double precision <= 20
+      AND (launch_speed::double precision + launch_angle::double precision * 2.4) >= 98
+      AND launch_speed::double precision >= 86 AND launch_speed::double precision <= 95
+    THEN 4
+    WHEN (launch_speed::double precision - launch_angle::double precision) >= 76
+      AND (launch_speed::double precision + launch_angle::double precision * 2.4) >= 98
+      AND launch_speed::double precision >= 95
+      AND launch_angle::double precision <= 30
+    THEN 4
+    WHEN (launch_speed::double precision + launch_angle::double precision * 2) >= 116
+    THEN 3
+    WHEN (launch_speed::double precision + launch_angle::double precision * 2) <= 116
+    THEN 2
+    ELSE 0
+  END
+`;
+
+async function fetchTangoContactBucketPercentiles(
+  pool: pg.Pool,
+  game_year: number,
+  batter_mlbam: number
+): Promise<Partial<Record<SpeedAngleCode, number>> | null> {
+  try {
+    const { rows } = await pool.query(
+      `
+      WITH classified AS (
+        SELECT
+          game_year,
+          batter_mlbam,
+          (${TANGO_CODE_SQL})::integer AS code
+        FROM statcast_pitch
+        WHERE game_year = $1
+          AND launch_speed IS NOT NULL
+          AND launch_angle IS NOT NULL
+      ),
+      agg AS (
+        SELECT
+          game_year,
+          batter_mlbam,
+          COUNT(*)::bigint AS bbe,
+          COUNT(*) FILTER (WHERE code = 6)::bigint AS n6,
+          COUNT(*) FILTER (WHERE code = 5)::bigint AS n5,
+          COUNT(*) FILTER (WHERE code = 4)::bigint AS n4,
+          COUNT(*) FILTER (WHERE code = 3)::bigint AS n3,
+          COUNT(*) FILTER (WHERE code = 2)::bigint AS n2,
+          COUNT(*) FILTER (WHERE code = 1)::bigint AS n1,
+          COUNT(*) FILTER (WHERE code = 0)::bigint AS n0
+        FROM classified
+        GROUP BY game_year, batter_mlbam
+      ),
+      pcts AS (
+        SELECT
+          game_year,
+          batter_mlbam,
+          bbe,
+          (100.0 * n6 / bbe)::double precision AS p6,
+          (100.0 * n5 / bbe)::double precision AS p5,
+          (100.0 * n4 / bbe)::double precision AS p4,
+          (100.0 * n3 / bbe)::double precision AS p3,
+          (100.0 * n2 / bbe)::double precision AS p2,
+          (100.0 * n1 / bbe)::double precision AS p1,
+          (100.0 * n0 / bbe)::double precision AS p0
+        FROM agg
+        WHERE bbe >= ${TANGO_BUCKET_PERCENTILE_BBE_FLOOR}
+      ),
+      ranked AS (
+        SELECT
+          game_year,
+          batter_mlbam,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p6 ASC NULLS LAST))::numeric, 0)::integer AS pr6,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p5 ASC NULLS LAST))::numeric, 0)::integer AS pr5,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p4 ASC NULLS LAST))::numeric, 0)::integer AS pr4,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p3 DESC NULLS LAST))::numeric, 0)::integer AS pr3,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p2 DESC NULLS LAST))::numeric, 0)::integer AS pr2,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p1 DESC NULLS LAST))::numeric, 0)::integer AS pr1,
+          ROUND((100 * PERCENT_RANK() OVER (PARTITION BY game_year ORDER BY p0 ASC NULLS LAST))::numeric, 0)::integer AS pr0
+        FROM pcts
+      )
+      SELECT pr6, pr5, pr4, pr3, pr2, pr1, pr0
+      FROM ranked
+      WHERE game_year = $1 AND batter_mlbam = $2
+      `,
+      [game_year, batter_mlbam]
+    );
+    const r = rows[0] as
+      | {
+          pr6: unknown;
+          pr5: unknown;
+          pr4: unknown;
+          pr3: unknown;
+          pr2: unknown;
+          pr1: unknown;
+          pr0: unknown;
+        }
+      | undefined;
+    if (!r) return null;
+    const num = (v: unknown): number | undefined =>
+      v != null && typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : undefined;
+    return {
+      6: num(r.pr6),
+      5: num(r.pr5),
+      4: num(r.pr4),
+      3: num(r.pr3),
+      2: num(r.pr2),
+      1: num(r.pr1),
+      0: num(r.pr0),
+    };
+  } catch {
+    return null;
+  }
+}
 /** Statcast `statcast_pitch` / related tables: do not use this floor for FanGraphs-only routes (e.g. league percentiles). */
 const MIN_YEAR = 2010;
 const MAX_YEAR = 2026;
@@ -371,26 +522,118 @@ export async function statcastLeagueMovementByYear(
   }
 }
 
+function subsampleEvenly<T>(items: T[], max: number): T[] {
+  if (items.length <= max) return items;
+  const out: T[] = [];
+  const n = items.length;
+  for (let i = 0; i < max; i += 1) {
+    const idx = Math.round((i * (n - 1)) / Math.max(max - 1, 1));
+    out.push(items[idx]!);
+  }
+  return out;
+}
+
 export async function statcastBatterBattedBall(
   pool: pg.Pool,
   batter_mlbam: number,
   game_year: number
 ): Promise<Record<string, unknown>> {
   const y = clampYear(game_year);
-  const { rows } = await pool.query(
-    `
-    SELECT
-      COUNT(*) FILTER (WHERE launch_speed IS NOT NULL)::bigint AS bbe,
-      ROUND(AVG(launch_speed)::numeric, 1) AS avg_ev,
-      ROUND(AVG(launch_angle)::numeric, 1) AS avg_la
-    FROM statcast_pitch
-    WHERE game_year = $1
-      AND batter_mlbam = $2
-      AND launch_speed IS NOT NULL
-    `,
-    [y, batter_mlbam]
-  );
-  return rowToJson((rows[0] ?? {}) as Record<string, unknown>);
+  const [{ rows: aggRows }, { rows: detailRows }] = await Promise.all([
+    pool.query(
+      `
+      SELECT
+        COUNT(*) FILTER (WHERE launch_speed IS NOT NULL)::bigint AS bbe,
+        ROUND(AVG(launch_speed)::numeric, 1) AS avg_ev,
+        ROUND(AVG(launch_angle)::numeric, 1) AS avg_la
+      FROM statcast_pitch
+      WHERE game_year = $1
+        AND batter_mlbam = $2
+        AND launch_speed IS NOT NULL
+      `,
+      [y, batter_mlbam]
+    ),
+    pool.query(
+      `
+      SELECT
+        launch_speed::double precision AS ev,
+        launch_angle::double precision AS la
+      FROM statcast_pitch
+      WHERE game_year = $1
+        AND batter_mlbam = $2
+        AND launch_speed IS NOT NULL
+        AND launch_angle IS NOT NULL
+      ORDER BY game_date DESC NULLS LAST, game_pk DESC, at_bat_number, pitch_number
+      LIMIT $3
+      `,
+      [y, batter_mlbam, MAX_BATTER_EV_LA_FETCH]
+    ),
+  ]);
+
+  const base = rowToJson((aggRows[0] ?? {}) as Record<string, unknown>);
+  const truncatedFetch = detailRows.length >= MAX_BATTER_EV_LA_FETCH;
+
+  const counts = new Map<SpeedAngleCode, number>([
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, 0],
+    [6, 0],
+  ]);
+  const classified: { ev: number; la: number; code: SpeedAngleCode }[] = [];
+
+  for (const r of detailRows) {
+    const ev = Number((r as { ev?: unknown }).ev);
+    const la = Number((r as { la?: unknown }).la);
+    if (!Number.isFinite(ev) || !Number.isFinite(la)) continue;
+    const code = speedAngleCode(ev, la);
+    classified.push({ ev, la, code });
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+
+  const bbeClassified = classified.length;
+
+  const totalBbeEv = Number((aggRows[0] as { bbe?: unknown } | undefined)?.bbe ?? 0);
+  let prByCode: Partial<Record<SpeedAngleCode, number>> | null = null;
+  if (totalBbeEv >= TANGO_BUCKET_PERCENTILE_BBE_FLOOR) {
+    prByCode = await fetchTangoContactBucketPercentiles(pool, y, batter_mlbam);
+  }
+
+  const buckets = ([6, 5, 4, 3, 2, 1, 0] as const).map((code) => {
+    const count = counts.get(code) ?? 0;
+    const pct =
+      bbeClassified > 0
+        ? Math.round(((100 * count) / bbeClassified + Number.EPSILON) * 10) / 10
+        : 0;
+    const leaguePercentile =
+      prByCode != null && prByCode[code] !== undefined ? prByCode[code]! : null;
+    return {
+      code,
+      label: SPEED_ANGLE_LABELS[code],
+      count,
+      pct,
+      league_percentile: leaguePercentile,
+    };
+  });
+
+  const contact_points = subsampleEvenly(classified, CONTACT_POINTS_RETURN_CAP).map((p) => ({
+    ev: p.ev,
+    la: p.la,
+    code: p.code,
+  }));
+
+  return {
+    ...base,
+    bbe_classified: bbeClassified,
+    contact_truncated: truncatedFetch,
+    contact_quality: {
+      denominator: bbeClassified,
+      buckets,
+    },
+    contact_points,
+  };
 }
 
 /**

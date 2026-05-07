@@ -58,6 +58,10 @@ import { usePlayerCardCoreQueries } from '@/api/playerQueries.js';
 import { BatPathSummary, type BatPathApiRow } from '@/features/batting-path/BatPathSummary.js';
 import { inferPrimaryCardRole } from '@/features/player-card/playerCardPrimaryRole.js';
 import { fetchFgRoleHint } from '@/lib/playerFgRoleHint.js';
+import {
+  BattedBallContactChart,
+  parseBattedBallContactViz,
+} from '@/features/batted-ball/BattedBallContactChart.js';
 import { SprayChart } from '@/features/spray-chart/SprayChart.js';
 import { OaaHeatmapPlaceholder } from '@/features/fielding-oaa/OaaHeatmapPlaceholder.js';
 import { PitchMixVeloTable } from '@/features/pitch-mix/PitchMixVeloTable.js';
@@ -620,6 +624,11 @@ export function PlayerCardPanel({
     [leagueMovement, role, pitchTypesMovementFilter]
   );
 
+  const battedBallContactViz = useMemo(
+    () => parseBattedBallContactViz(statcast?.batted_ball),
+    [statcast?.batted_ball],
+  );
+
   useLayoutEffect(() => {
     if (role !== 'fielding') {
       setFieldingHistoryLoading(false);
@@ -952,10 +961,20 @@ export function PlayerCardPanel({
         {statcast && statcastAvailable && role === 'batting' && (
           <Stack spacing={1}>
             <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Batted ball">
-              <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                <Chip size="small" label={`BBE ${String(statcast.batted_ball?.bbe ?? '—')}`} />
-                <Chip size="small" label={`EV ${String(statcast.batted_ball?.avg_ev ?? '—')}`} />
-                <Chip size="small" label={`LA ${String(statcast.batted_ball?.avg_la ?? '—')}`} />
+              <Stack spacing={1}>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                  <Chip size="small" label={`BBE ${String(statcast.batted_ball?.bbe ?? '—')}`} />
+                  <Chip size="small" label={`EV ${String(statcast.batted_ball?.avg_ev ?? '—')}`} />
+                  <Chip size="small" label={`LA ${String(statcast.batted_ball?.avg_la ?? '—')}`} />
+                </Stack>
+                {battedBallContactViz ? (
+                  <BattedBallContactChart
+                    buckets={battedBallContactViz.buckets}
+                    denominator={battedBallContactViz.denominator}
+                    points={battedBallContactViz.points}
+                    contactTruncated={battedBallContactViz.contactTruncated}
+                  />
+                ) : null}
               </Stack>
             </RailCollapsibleSection>
             <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Bat tracking">

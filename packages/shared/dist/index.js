@@ -40,3 +40,4 @@ export const errorEventDataSchema = z.object({
 });
 export { leaderboardAttachmentSchema, leaderboardColumnSchema, leaderboardEventDataSchema, leaderboardProvenanceSchema, } from './leaderboard.js';
 export { thinkingEventDataSchema } from './chatThinking.js';
+export { SPEED_ANGLE_COLORS, SPEED_ANGLE_LABELS, speedAngleCode, } from './speedAngleCode.js';

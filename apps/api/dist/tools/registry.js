@@ -1,10 +1,12 @@
 import { comparePlayersCareer, stripComparePayloadForLlm } from '../repos/comparePlayers.js';
 import { compareStatcastSummary } from '../repos/compareStatcastSummary.js';
 import { getFgSeasonLines } from '../repos/fangraphsSeason.js';
+import { leaderboardSortMetricsDoc } from '../leaderboard/catalog.js';
+import { executeLeaderboardQuery } from '../repos/leaderboardQuery.js';
 import { resolvePlayer, resolvePlayerIdFromQuery } from '../repos/players.js';
 import { statcastBatterBattedBall, statcastPitcherPitchMix, statcastSampleRows, } from '../repos/statcast.js';
 import { enrichToolArgs, parseArgs } from './argEnrichment.js';
-import { comparePlayersCareerArgsSchema, getFgSeasonLineArgsSchema, resolvePlayerArgsSchema, statcastBatterBattedBallArgsSchema, statcastCompareStatcastArgsSchema, statcastPitcherPitchMixArgsSchema, statcastSampleRowsArgsSchema, } from './schemas.js';
+import { comparePlayersCareerArgsSchema, getFgSeasonLineArgsSchema, resolvePlayerArgsSchema, statcastBatterBattedBallArgsSchema, statcastCompareStatcastArgsSchema, statcastPitcherPitchMixArgsSchema, statcastSampleRowsArgsSchema, leaderboardQueryArgsSchema, } from './schemas.js';
 /** Ollama `/api/chat` `tools` array (JSON-schema functions). */
 export const ollamaToolDefinitions = [
     {
@@ -88,7 +90,7 @@ export const ollamaToolDefinitions = [
         type: 'function',
         function: {
             name: 'statcast_batter_batted_ball',
-            description: 'Statcast batted-ball event count and average exit velocity / launch angle for one batter MLBAM in one game_year.',
+            description: 'Statcast batted-ball summary for one batter MLBAM and game_year: BBE count, average EV/LA, Tango Tiger contact buckets (barrel/solid/flare/topped/under/weak), bucket percentages, and EV×LA scatter codes.',
             parameters: {
                 type: 'object',
                 required: ['batter_mlbam', 'game_year'],
@@ -129,6 +131,46 @@ export const ollamaToolDefinitions = [
                     player_b_query: { type: 'string' },
                     game_year: { type: 'integer' },
                     role: { type: 'string', enum: ['pitcher', 'batter'] },
+                },
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'leaderboard_query',
+            description: `Rank MLB players from FanGraphs-backed career or single-season consolidated stats (not Statcast pitch-type leaderboards). **Stuff+, Location+, Pitching+ are not sort_metric values here** — only allowlisted keys (war, era, fip, k_pct, …). If the user asks for Stuff+ rankings, use a proxy (e.g. k_pct desc on fg_pitching_season) and say the API does not expose Stuff+ as a column. If the user did not clearly ask for career totals vs a single-season ranking (e.g. "all time" without which), ask one short clarifying question first — unless they already named a stat and season/year. **Offensive** rankings: fg_batting_* with **war** or **wrc_plus**, order **desc**. Do **not** use tto_rate_sum except for explicit TTO questions (order **desc**). Defense: def_runs / career_def_runs. **Pitching run prevention**: era or fip, order **asc**. **Pitching "stuff" proxies** (no Stuff+ column): **k_pct** order **desc** or **war** order **desc** — not era/fip unless they asked for ERA/FIP. For fg_batting_season use min_pa ≥ ~200 or qualified_only unless small samples are intended. Season filters: season_from/season_to (single year → set both). qualified_only uses FanGraphs qualification flags. Sort metrics per dataset: ${leaderboardSortMetricsDoc()}`,
+            parameters: {
+                type: 'object',
+                required: ['dataset', 'sort_metric'],
+                properties: {
+                    dataset: {
+                        type: 'string',
+                        enum: [
+                            'fg_batting_career',
+                            'fg_pitching_career',
+                            'fg_batting_season',
+                            'fg_pitching_season',
+                        ],
+                    },
+                    sort_metric: {
+                        type: 'string',
+                        description: 'Must be an allowed key for the dataset (not Stuff+/Location+/Pitching+). Examples: career_war, war, k_pct, tto_rate_sum, def_runs, career_def_runs, era, fip.',
+                    },
+                    order: { type: 'string', enum: ['asc', 'desc'] },
+                    limit: { type: 'integer', description: 'Max rows 1–100, default 25' },
+                    columns: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional display columns; omit for defaults.',
+                    },
+                    season_from: { type: 'integer' },
+                    season_to: { type: 'integer' },
+                    min_pa: { type: 'integer', description: 'Batting PA floor (career or season)' },
+                    min_ip_outs: { type: 'integer', description: 'Pitching IP-outs floor' },
+                    min_tbf: { type: 'integer', description: 'Pitching batters faced floor' },
+                    qualified_only: { type: 'boolean' },
+                    title: { type: 'string', description: 'Short table title for the UI' },
                 },
             },
         },
@@ -251,9 +293,75 @@ export async function executeTool(pool, name, rawArgs, ctx) {
                 enhanced: true,
             });
         }
+        case 'leaderboard_query': {
+            const p = leaderboardQueryArgsSchema.safeParse(args);
+            if (!p.success) {
+                return {
+                    error: 'invalid_args',
+                    details: p.error.flatten(),
+                    hint: 'dataset must be fg_batting_career | fg_pitching_career | fg_batting_season | fg_pitching_season; sort_metric must match the dataset allowlist.',
+                };
+            }
+            const out = await executeLeaderboardQuery(pool, {
+                dataset: p.data.dataset,
+                sort_metric: p.data.sort_metric.trim(),
+                order: p.data.order ?? 'desc',
+                limit: p.data.limit ?? 25,
+                columns: p.data.columns,
+                season_from: p.data.season_from,
+                season_to: p.data.season_to,
+                min_pa: p.data.min_pa,
+                min_ip_outs: p.data.min_ip_outs,
+                min_tbf: p.data.min_tbf,
+                qualified_only: p.data.qualified_only,
+                title: p.data.title,
+            });
+            if (!out.ok) {
+                return {
+                    error: out.error,
+                    ...(out.allowed_sort_metrics != null ? { allowed_sort_metrics: out.allowed_sort_metrics } : {}),
+                    ...(out.invalid_columns != null ? { invalid_columns: out.invalid_columns } : {}),
+                };
+            }
+            return { leaderboard: out.leaderboard };
+        }
         default:
             return { error: 'unknown_tool', name };
     }
+}
+/** Rows sent to the model after leaderboard_query (full table still goes to SSE + disk traces). */
+const LLM_LEADERBOARD_ROW_CAP = 25;
+/**
+ * Shrinks leaderboard JSON in tool messages so follow-up Ollama rounds stay under context limits.
+ * Does not change SSE or persistFullToolIo (those use the full executeTool payload).
+ */
+export function slimLeaderboardPayloadForLlm(payload) {
+    if (!payload || typeof payload !== 'object')
+        return payload;
+    const rec = payload;
+    if (rec.error != null)
+        return payload;
+    const lb = rec.leaderboard;
+    if (!lb || typeof lb !== 'object')
+        return payload;
+    const board = lb;
+    const rows = board.rows;
+    if (!Array.isArray(rows))
+        return payload;
+    if (rows.length <= LLM_LEADERBOARD_ROW_CAP)
+        return payload;
+    return {
+        ...rec,
+        leaderboard: {
+            ...board,
+            rows: rows.slice(0, LLM_LEADERBOARD_ROW_CAP),
+            _llm_truncation: {
+                rows_shown: LLM_LEADERBOARD_ROW_CAP,
+                rows_total: rows.length,
+                note: 'UI shows the full table; summarize from these rows.',
+            },
+        },
+    };
 }
 export function toolResultString(payload) {
     try {

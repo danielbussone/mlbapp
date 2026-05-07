@@ -1,0 +1,102 @@
+.wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.plotWithLegend {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.canvasWrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/** Match `BatPathMiniGraphics` `.miniCard` — panel fill + divider border. */
+.plotPanel {
+  box-sizing: border-box;
+  background-color: var(--mui-palette-background-paper, #fff);
+  border: 1px solid;
+  border-color: var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+  border-radius: var(--mui-shape-borderRadius, 4px);
+  overflow: hidden;
+}
+
+.canvas {
+  display: block;
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 340 / 280;
+  vertical-align: top;
+}
+
+.legend {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  margin-top: 0;
+  padding-top: 2px;
+  width: auto;
+  max-width: 13rem;
+  min-width: min(13rem, 100%);
+}
+
+.legendGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.legendRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.legendTextCol {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.legendFootnote {
+  line-height: 1.3;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.caption {
+  margin-top: 8px;
+}
+
+@media (max-width: 520px) {
+  .plotWithLegend {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .canvasWrap {
+    max-width: none;
+  }
+
+  .legend {
+    max-width: none;
+    width: 100%;
+  }
+}

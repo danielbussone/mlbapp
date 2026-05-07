@@ -73,3 +73,10 @@ export {
 } from './leaderboard.js';
 
 export { thinkingEventDataSchema, type ThinkingEventData } from './chatThinking.js';
+
+export {
+  SPEED_ANGLE_COLORS,
+  SPEED_ANGLE_LABELS,
+  speedAngleCode,
+  type SpeedAngleCode,
+} from './speedAngleCode.js';

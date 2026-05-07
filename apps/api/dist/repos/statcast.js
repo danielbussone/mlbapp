@@ -1,3 +1,4 @@
+import { SPEED_ANGLE_LABELS, speedAngleCode } from '@mlbapp/shared';
 import { rowToJson, rowsToJson } from './rowJson.js';
 /**
  * Savant bat-tracking fields on Statcast Search CSV (also in `payload_jsonb` after ETL).
@@ -13,6 +14,10 @@ export const STATCAST_BAT_TRACKING_JSON_KEYS = {
 const MAX_SAMPLE_PITCHER = 200;
 /** Batter spray / batted-ball pulls can be much larger (all chartable BIP with hc_x/hc_y). */
 const MAX_SAMPLE_BATTER = 12_000;
+/** Safety cap when loading EV/LA rows for Tango contact classification (per batter-season). */
+const MAX_BATTER_EV_LA_FETCH = 50_000;
+/** Max scatter points returned on `batted_ball.contact_points` (bucket % use full classified set). */
+const CONTACT_POINTS_RETURN_CAP = 8000;
 /** Statcast `statcast_pitch` / related tables: do not use this floor for FanGraphs-only routes (e.g. league percentiles). */
 const MIN_YEAR = 2010;
 const MAX_YEAR = 2026;
@@ -309,19 +314,92 @@ export async function statcastLeagueMovementByYear(pool, game_year, p_throws_han
         return [];
     }
 }
+function subsampleEvenly(items, max) {
+    if (items.length <= max)
+        return items;
+    const out = [];
+    const n = items.length;
+    for (let i = 0; i < max; i += 1) {
+        const idx = Math.round((i * (n - 1)) / Math.max(max - 1, 1));
+        out.push(items[idx]);
+    }
+    return out;
+}
 export async function statcastBatterBattedBall(pool, batter_mlbam, game_year) {
     const y = clampYear(game_year);
-    const { rows } = await pool.query(`
-    SELECT
-      COUNT(*) FILTER (WHERE launch_speed IS NOT NULL)::bigint AS bbe,
-      ROUND(AVG(launch_speed)::numeric, 1) AS avg_ev,
-      ROUND(AVG(launch_angle)::numeric, 1) AS avg_la
-    FROM statcast_pitch
-    WHERE game_year = $1
-      AND batter_mlbam = $2
-      AND launch_speed IS NOT NULL
-    `, [y, batter_mlbam]);
-    return rowToJson((rows[0] ?? {}));
+    const [{ rows: aggRows }, { rows: detailRows }] = await Promise.all([
+        pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE launch_speed IS NOT NULL)::bigint AS bbe,
+        ROUND(AVG(launch_speed)::numeric, 1) AS avg_ev,
+        ROUND(AVG(launch_angle)::numeric, 1) AS avg_la
+      FROM statcast_pitch
+      WHERE game_year = $1
+        AND batter_mlbam = $2
+        AND launch_speed IS NOT NULL
+      `, [y, batter_mlbam]),
+        pool.query(`
+      SELECT
+        launch_speed::double precision AS ev,
+        launch_angle::double precision AS la
+      FROM statcast_pitch
+      WHERE game_year = $1
+        AND batter_mlbam = $2
+        AND launch_speed IS NOT NULL
+        AND launch_angle IS NOT NULL
+      ORDER BY game_date DESC NULLS LAST, game_pk DESC, at_bat_number, pitch_number
+      LIMIT $3
+      `, [y, batter_mlbam, MAX_BATTER_EV_LA_FETCH]),
+    ]);
+    const base = rowToJson((aggRows[0] ?? {}));
+    const truncatedFetch = detailRows.length >= MAX_BATTER_EV_LA_FETCH;
+    const counts = new Map([
+        [0, 0],
+        [1, 0],
+        [2, 0],
+        [3, 0],
+        [4, 0],
+        [5, 0],
+        [6, 0],
+    ]);
+    const classified = [];
+    for (const r of detailRows) {
+        const ev = Number(r.ev);
+        const la = Number(r.la);
+        if (!Number.isFinite(ev) || !Number.isFinite(la))
+            continue;
+        const code = speedAngleCode(ev, la);
+        classified.push({ ev, la, code });
+        counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+    const bbeClassified = classified.length;
+    const buckets = [6, 5, 4, 3, 2, 1, 0].map((code) => {
+        const count = counts.get(code) ?? 0;
+        const pct = bbeClassified > 0
+            ? Math.round(((100 * count) / bbeClassified + Number.EPSILON) * 10) / 10
+            : 0;
+        return {
+            code,
+            label: SPEED_ANGLE_LABELS[code],
+            count,
+            pct,
+        };
+    });
+    const contact_points = subsampleEvenly(classified, CONTACT_POINTS_RETURN_CAP).map((p) => ({
+        ev: p.ev,
+        la: p.la,
+        code: p.code,
+    }));
+    return {
+        ...base,
+        bbe_classified: bbeClassified,
+        contact_truncated: truncatedFetch,
+        contact_quality: {
+            denominator: bbeClassified,
+            buckets,
+        },
+        contact_points,
+    };
 }
 /**
  * Season aggregates for bat path (bat speed, attack angle / direction, swing tilt) vs league

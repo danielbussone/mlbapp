@@ -112,7 +112,7 @@ export const ollamaToolDefinitions: unknown[] = [
     function: {
       name: 'statcast_batter_batted_ball',
       description:
-        'Statcast batted-ball event count and average exit velocity / launch angle for one batter MLBAM in one game_year.',
+        'Statcast batted-ball summary for one batter MLBAM and game_year: BBE count, average EV/LA, Tango Tiger contact buckets (barrel/solid/flare/topped/under/weak), bucket percentages, and EV×LA scatter codes.',
       parameters: {
         type: 'object',
         required: ['batter_mlbam', 'game_year'],
