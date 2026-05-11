@@ -545,7 +545,9 @@ export async function statcastBatterBattedBall(
       SELECT
         COUNT(*) FILTER (WHERE launch_speed IS NOT NULL)::bigint AS bbe,
         ROUND(AVG(launch_speed)::numeric, 1) AS avg_ev,
-        ROUND(AVG(launch_angle)::numeric, 1) AS avg_la
+        ROUND(AVG(launch_angle)::numeric, 1) AS avg_la,
+        ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY launch_speed))::numeric, 1) AS ev90,
+        ROUND(MAX(launch_speed)::numeric, 1) AS max_ev
       FROM statcast_pitch
       WHERE game_year = $1
         AND batter_mlbam = $2
@@ -595,6 +597,14 @@ export async function statcastBatterBattedBall(
 
   const bbeClassified = classified.length;
 
+  /** Share of classified EV+LA BBE in barrels (6), solid (5), or flares & burners (4). */
+  const idealContactCount =
+    (counts.get(6) ?? 0) + (counts.get(5) ?? 0) + (counts.get(4) ?? 0);
+  const ideal_contact_pct =
+    bbeClassified > 0
+      ? Math.round(((100 * idealContactCount) / bbeClassified + Number.EPSILON) * 10) / 10
+      : null;
+
   const totalBbeEv = Number((aggRows[0] as { bbe?: unknown } | undefined)?.bbe ?? 0);
   let prByCode: Partial<Record<SpeedAngleCode, number>> | null = null;
   if (totalBbeEv >= TANGO_BUCKET_PERCENTILE_BBE_FLOOR) {
@@ -627,6 +637,7 @@ export async function statcastBatterBattedBall(
   return {
     ...base,
     bbe_classified: bbeClassified,
+    ideal_contact_pct,
     contact_truncated: truncatedFetch,
     contact_quality: {
       denominator: bbeClassified,

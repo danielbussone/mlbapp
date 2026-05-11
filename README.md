@@ -8,11 +8,11 @@ Local-first baseball chat + Savant-style player cards (FanGraphs + Statcast). St
 
 - **Node 20+** (required — the API uses **Fastify 5**, which relies on `diagnostics_channel.tracingChannel`, not available on older Node 18.x)
 - pnpm 9+ (or compatible; lockfile may be generated with pnpm 7+ locally)
-- Docker Desktop (or another Docker daemon) — **only** for `docker compose` services and `pnpm db:migrate`. **Not required** to run `pnpm dev` (API + Vite work on the host alone).
+- Docker Desktop (or another Docker daemon) — **only** for `docker compose` services and Flyway (`pnpm db:migrate` against local Postgres, or `pnpm db:migrate:remote` against RDS — both use a Flyway container). **Not required** to run `pnpm dev` (API + Vite work on the host alone).
 
 ## Quick start (recommended dev)
 
-1. Copy env: `cp .env.example .env` and adjust if needed.
+1. Copy env: `cp .env.example .env` and adjust if needed. For a **remote RDS** database, copy [`.env.remote.example`](.env.remote.example) to `.env.remote`, set `DATABASE_URL`, then run `pnpm dev:remote` (or set `MLBAPP_DOTENV=.env.remote` in `.env` / your shell — see comments in [`.env.example`](.env.example)).
 2. **Optional — Postgres + Ollama in Docker:** start **Docker Desktop** (or your engine) first. If you see `Cannot connect to the Docker daemon`, the daemon is not running — open Docker Desktop and wait until it is “running”, then retry.
 
    Postgres is published on **host port 5433** (not 5432) so it does not conflict with another local Postgres. Use `DATABASE_URL=...@localhost:5433/mlbapp` in `.env` when the API runs on the host.
@@ -21,10 +21,18 @@ Local-first baseball chat + Savant-style player cards (FanGraphs + Statcast). St
    docker compose up -d db ollama
    ```
 
-3. **Optional — Flyway migrations** (needs the `db` container up):
+3. **Optional — Flyway migrations**
+
+   **Local Compose Postgres** (needs the `db` container up):
 
    ```bash
    pnpm db:migrate
+   ```
+
+   **Remote RDS** (same `DATABASE_URL` as in `.env.remote`; Docker runs the Flyway image against that host — no local `db` service required):
+
+   ```bash
+   pnpm db:migrate:remote
    ```
 
    If Flyway reports a **checksum mismatch** on an already-applied version (common after an applied migration file was edited in git), the database schema is usually still correct — update Flyway’s history to match the current files:
@@ -33,6 +41,8 @@ Local-first baseball chat + Savant-style player cards (FanGraphs + Statcast). St
    pnpm db:repair
    pnpm db:migrate
    ```
+
+   For RDS, use `pnpm db:repair:remote` then `pnpm db:migrate:remote` instead.
 
    Use **`db:repair`** only when you intend to **reconcile metadata** with the SQL on disk; if the database is actually missing objects relative to the repo, add a **new** Flyway version (e.g. `V9__...sql`) instead of rewriting old migrations.
 

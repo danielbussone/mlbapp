@@ -25,13 +25,7 @@ def normalize_cli_argv(argv: list[str] | None) -> list[str]:
 _EXPORT_PREFIX = re.compile(r"^export\s+", re.IGNORECASE)
 
 
-def load_repo_dotenv(repo_root: Path, *, filename: str = ".env") -> None:
-    """
-    Populate ``os.environ`` from ``<repo_root>/.env`` for keys not already set.
-    Matches common ``KEY=value`` / ``export KEY=value`` lines (no override of
-    existing process env).
-    """
-    path = repo_root / filename
+def _apply_env_file(path: Path, *, override: bool) -> None:
     if not path.is_file():
         return
     text = path.read_text(encoding="utf-8-sig")
@@ -45,11 +39,32 @@ def load_repo_dotenv(repo_root: Path, *, filename: str = ".env") -> None:
         key, _, val = line.partition("=")
         key = key.strip()
         val = val.strip()
-        if not key or key in os.environ:
+        if not key:
+            continue
+        if not override and key in os.environ:
             continue
         if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
             val = val[1:-1]
         os.environ[key] = val
+
+
+def load_repo_dotenv(repo_root: Path, *, filename: str = ".env") -> None:
+    """
+    Populate ``os.environ`` from ``<repo_root>/.env`` for keys not already set.
+    Matches common ``KEY=value`` / ``export KEY=value`` lines (no override of
+    existing process env).
+
+    If ``MLBAPP_DOTENV`` is set (in the process environment or by the first file),
+    loads ``<repo_root>/<MLBAPP_DOTENV>`` next and **overrides** keys from that file
+    (same behavior as ``apps/api`` ``loadEnv.ts`` with dotenv ``override``).
+    ``MLBAPP_DOTENV`` may be an absolute path.
+    """
+    _apply_env_file(repo_root / filename, override=False)
+    extra = os.environ.get("MLBAPP_DOTENV", "").strip()
+    if not extra:
+        return
+    overlay = Path(extra) if extra.startswith("/") else repo_root / extra
+    _apply_env_file(overlay, override=True)
 
 
 def configure_pybaseball_cache(repo_root: Path | None = None) -> Path:

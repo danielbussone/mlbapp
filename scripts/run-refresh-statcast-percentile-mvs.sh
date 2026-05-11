@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # Run from repo root: pnpm db:refresh-percentiles
-# Loads DATABASE_URL from .env if present (pnpm does not auto-load .env for scripts).
+# Loads DATABASE_URL from repo .env and optional MLBAPP_DOTENV overlay (see .env.example).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+# shellcheck source=load-repo-env.sh
+source "$ROOT/scripts/load-repo-env.sh"
+load_repo_env "$ROOT"
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is not set." >&2
   echo "Copy .env.example to .env, or export DATABASE_URL before running this script." >&2

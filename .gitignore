@@ -11,6 +11,7 @@ storybook-static/
 
 # Environment
 .env
+.env.remote
 .env.local
 .env.development.local
 .env.test.local

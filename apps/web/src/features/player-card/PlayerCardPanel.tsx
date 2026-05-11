@@ -84,6 +84,81 @@ const ARM_ANGLE_REG_COEF_Z = 17.5145;
 const ARM_ANGLE_REG_CLIP_MIN = 0;
 const ARM_ANGLE_REG_CLIP_MAX = 95;
 
+/** Label/value styling: `battedBall*` classes in `PlayerCardPanel.module.css`. */
+function BattedBallMetricChip({
+  labelBold,
+  valueDisplay,
+  tooltip,
+}: {
+  labelBold: string;
+  valueDisplay: string;
+  tooltip: string;
+}) {
+  return (
+    <Tooltip
+      arrow
+      placement="top"
+      title={tooltip}
+      slotProps={{
+        tooltip: {
+          className: styles.battedBallTooltip,
+        },
+      }}
+    >
+      <Chip
+        size="small"
+        label={
+          <span className={styles.battedBallChipLabelRow}>
+            <span className={styles.battedBallChipLabelBold}>{labelBold}</span>
+            <span className={styles.battedBallChipValue}>{valueDisplay}</span>
+          </span>
+        }
+      />
+    </Tooltip>
+  );
+}
+
+function BattedBallChipsRow({ bb }: { bb: StatcastJsonRow | undefined }) {
+  const idealPct =
+    bb?.ideal_contact_pct != null && Number.isFinite(Number(bb.ideal_contact_pct))
+      ? `${Number(bb.ideal_contact_pct).toFixed(1)}%`
+      : '—';
+  return (
+    <>
+      <BattedBallMetricChip
+        labelBold="BBE"
+        valueDisplay={String(bb?.bbe ?? '—')}
+        tooltip="Batted ball events this season with measured exit velocity (Statcast)."
+      />
+      <BattedBallMetricChip
+        labelBold="LA"
+        valueDisplay={String(bb?.avg_la ?? '—')}
+        tooltip="Mean launch angle on those batted balls (degrees)."
+      />
+      <BattedBallMetricChip
+        labelBold="EV"
+        valueDisplay={String(bb?.avg_ev ?? '—')}
+        tooltip="Mean exit velocity on those batted balls (mph)."
+      />
+      <BattedBallMetricChip
+        labelBold="EV90"
+        valueDisplay={String(bb?.ev90 ?? '—')}
+        tooltip="90th percentile exit velocity across those BBE (mph)."
+      />
+      <BattedBallMetricChip
+        labelBold="Max EV"
+        valueDisplay={String(bb?.max_ev ?? '—')}
+        tooltip="Highest exit velocity recorded this season (mph)."
+      />
+      <BattedBallMetricChip
+        labelBold="Ideal"
+        valueDisplay={idealPct}
+        tooltip="Share of balls in play with both EV and LA classified as barrel, solid contact, or flares & burners (Tango Tiger). Uses EV+LA rows only."
+      />
+    </>
+  );
+}
+
 /**
  * Arm-slot overlay for `MovementMiniPlot`:
  * 1. Prefer Statcast **`arm_angle`** when ≥`ARM_ANGLE_MIN_SAMPLE` pitches have a **non-zero** value (pre-2020 often `0`).
@@ -963,9 +1038,7 @@ export function PlayerCardPanel({
             <RailCollapsibleSection titleTypographyClassName={styles.subtitleStrong} title="Batted ball">
               <Stack spacing={1}>
                 <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                  <Chip size="small" label={`BBE ${String(statcast.batted_ball?.bbe ?? '—')}`} />
-                  <Chip size="small" label={`EV ${String(statcast.batted_ball?.avg_ev ?? '—')}`} />
-                  <Chip size="small" label={`LA ${String(statcast.batted_ball?.avg_la ?? '—')}`} />
+                  <BattedBallChipsRow bb={statcast.batted_ball} />
                 </Stack>
                 {battedBallContactViz ? (
                   <BattedBallContactChart
@@ -973,6 +1046,8 @@ export function PlayerCardPanel({
                     denominator={battedBallContactViz.denominator}
                     points={battedBallContactViz.points}
                     contactTruncated={battedBallContactViz.contactTruncated}
+                    avgEv={battedBallContactViz.avgEv}
+                    avgLa={battedBallContactViz.avgLa}
                   />
                 ) : null}
               </Stack>

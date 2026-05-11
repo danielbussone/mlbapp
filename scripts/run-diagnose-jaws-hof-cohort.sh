@@ -7,12 +7,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+# shellcheck source=load-repo-env.sh
+source "$ROOT/scripts/load-repo-env.sh"
+load_repo_env "$ROOT"
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is not set." >&2
   exit 1

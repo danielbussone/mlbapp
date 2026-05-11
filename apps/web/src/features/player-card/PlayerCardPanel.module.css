@@ -7,6 +7,26 @@
   font-weight: 600;
 }
 
+/* —— Batted ball metric chips (labels bold; values muted) —— */
+.battedBallTooltip {
+  max-width: 320px;
+}
+
+.battedBallChipLabelRow {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.battedBallChipLabelBold {
+  font-weight: 500;
+}
+
+.battedBallChipValue {
+  font-weight: 500;
+  color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.85));
+}
+
 /* —— Toolbar & alerts —— */
 .toolbarStack {
   margin-bottom: var(--mui-spacing-2, 16px);

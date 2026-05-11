@@ -2,6 +2,7 @@ import Box from '@mui/material/Box';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
@@ -33,6 +34,10 @@ export type BattedBallContactViz = {
   buckets: ContactBucketRow[];
   points: ContactPoint[];
   contactTruncated: boolean;
+  /** Season average exit velocity (mph), when available. */
+  avgEv: number | null;
+  /** Season average launch angle (deg), when available. */
+  avgLa: number | null;
 };
 
 export function parseBattedBallContactViz(bb: unknown): BattedBallContactViz | null {
@@ -68,11 +73,24 @@ export function parseBattedBallContactViz(bb: unknown): BattedBallContactViz | n
       code: Number(r.code),
     });
   }
+  const avgEvRaw = o.avg_ev;
+  const avgLaRaw = o.avg_la;
+  const avgEv =
+    avgEvRaw === null || avgEvRaw === undefined || Number.isNaN(Number(avgEvRaw))
+      ? null
+      : Number(avgEvRaw);
+  const avgLa =
+    avgLaRaw === null || avgLaRaw === undefined || Number.isNaN(Number(avgLaRaw))
+      ? null
+      : Number(avgLaRaw);
+
   return {
     denominator: denom,
     buckets,
     points,
     contactTruncated: Boolean(o.contact_truncated),
+    avgEv,
+    avgLa,
   };
 }
 
@@ -81,6 +99,9 @@ type Props = {
   denominator: number;
   points: ContactPoint[];
   contactTruncated?: boolean;
+  /** Season average EV/LA for highlighted marker; omit or null to hide. */
+  avgEv?: number | null;
+  avgLa?: number | null;
 };
 
 /** Finer EV/LA grid + overlapping brush squares merge into solid-looking fills (see `zoneBrushPx`). */
@@ -267,6 +288,8 @@ export function BattedBallContactChart({
   denominator,
   points,
   contactTruncated,
+  avgEv: avgEvProp,
+  avgLa: avgLaProp,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -282,6 +305,18 @@ export function BattedBallContactChart({
     if (!scatterSample200) return points;
     return subsampleEvenly(points, SCATTER_SAMPLE_CAP);
   }, [points, scatterSample200]);
+
+  const avgEv =
+    avgEvProp !== undefined && avgEvProp !== null && Number.isFinite(avgEvProp) ? avgEvProp : null;
+  const avgLa =
+    avgLaProp !== undefined && avgLaProp !== null && Number.isFinite(avgLaProp) ? avgLaProp : null;
+
+  const avgMarkerPx = useMemo(() => {
+    if (avgEv === null || avgLa === null) return null;
+    const { w, h } = cssSize;
+    const { ox, oy, scale } = layoutPlot(w, h);
+    return project(avgEv, avgLa, ox, oy, scale);
+  }, [cssSize, avgEv, avgLa]);
 
   useEffect(() => {
     const img = new Image();
@@ -390,7 +425,36 @@ export function BattedBallContactChart({
       ctx.lineWidth = 0.65;
       ctx.stroke();
     }
-  }, [batterReady, cssSize, dark, paperBg, scatterPoints, theme.palette.divider]);
+
+    if (avgEv !== null && avgLa !== null) {
+      const apt = project(avgEv, avgLa, ox, oy, scale);
+      const rRing = 6.5;
+      const rCore = 3.5;
+      const prim = theme.palette.primary.main;
+      ctx.beginPath();
+      ctx.arc(apt.x, apt.y, rRing, 0, Math.PI * 2);
+      ctx.strokeStyle = prim;
+      ctx.lineWidth = 2.25;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(apt.x, apt.y, rCore, 0, Math.PI * 2);
+      ctx.fillStyle = alpha(prim, dark ? 0.62 : 0.42);
+      ctx.fill();
+      ctx.strokeStyle = dark ? 'rgba(255,255,255,0.88)' : alpha('#000000', 0.32);
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+    }
+  }, [
+    avgEv,
+    avgLa,
+    batterReady,
+    cssSize,
+    dark,
+    paperBg,
+    scatterPoints,
+    theme.palette.divider,
+    theme.palette.primary.main,
+  ]);
 
   const orderedBuckets = [...buckets].sort((a, b) => b.code - a.code);
   const hasAnyPercentile = orderedBuckets.some((b) => b.leaguePercentile != null);
@@ -425,6 +489,31 @@ export function BattedBallContactChart({
       <div className={styles.plotWithLegend}>
         <div ref={wrapRef} className={`${styles.canvasWrap} ${styles.plotPanel}`}>
           <canvas ref={canvasRef} className={styles.canvas} aria-hidden />
+          {avgMarkerPx != null && avgEv != null && avgLa != null ? (
+            <Tooltip
+              arrow
+              placement="top"
+              title={
+                <Box component="span" sx={{ display: 'block', maxWidth: 240 }}>
+                  <Typography variant="caption" component="span" display="block" fontWeight={600}>
+                    Average batted ball for this hitter
+                  </Typography>
+                  <Typography variant="caption" component="span" display="block" sx={{ opacity: 0.92, mt: 0.35 }}>
+                    {avgEv.toFixed(1)} mph EV · {avgLa.toFixed(1)}° LA
+                  </Typography>
+                </Box>
+              }
+            >
+              <Box
+                component="span"
+                className={styles.avgMarkerHit}
+                sx={{ left: avgMarkerPx.x, top: avgMarkerPx.y }}
+                aria-label={`Season average batted ball: ${avgEv.toFixed(1)} mph exit velocity, ${avgLa.toFixed(
+                  1,
+                )} degrees launch angle`}
+              />
+            </Tooltip>
+          ) : null}
         </div>
         <Box className={styles.legend}>
           <div className={styles.legendGrid}>
