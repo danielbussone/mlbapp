@@ -8,7 +8,7 @@
   "scripts": {
     "predev": "pnpm --filter @mlbapp/shared build",
     "dev": "concurrently -n api,web -c blue,green \"pnpm --filter @mlbapp/api dev\" \"pnpm --filter @mlbapp/web dev\"",
-    "dev:remote": "MLBAPP_DOTENV=.env.remote pnpm dev",
+    "dev:remote": "cross-env MLBAPP_DOTENV=.env.remote pnpm dev",
     "build": "pnpm -r run build",
     "lint": "pnpm -r run lint",
     "db:refresh-percentiles": "bash scripts/run-refresh-statcast-percentile-mvs.sh",
@@ -16,21 +16,23 @@
     "db:diagnose-jaws-hof": "bash scripts/run-diagnose-jaws-hof-cohort.sh",
     "db:migrate": "docker compose --profile tools run --rm flyway",
     "db:repair": "docker compose --profile tools run --rm flyway repair",
-    "db:migrate:remote": "MLBAPP_DOTENV=.env.remote bash scripts/run-flyway-remote.sh migrate",
-    "db:repair:remote": "MLBAPP_DOTENV=.env.remote bash scripts/run-flyway-remote.sh repair",
-    "etl:install": "(test -d .venv-etl || python3 -m venv .venv-etl) && .venv-etl/bin/python -m pip install -e './etl[dev]'",
-    "etl:fg": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fg",
-    "etl:chadwick": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.chadwick",
-    "etl:hall-of-fame": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.hall_of_fame",
-    "etl:statcast": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.statcast",
-    "etl:sprint": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.sprint_running",
-    "etl:fielding-oaa": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fielding_oaa_cell",
-    "etl:fielding-oaa-if": "PYTHONPATH=etl .venv-etl/bin/python -m mlbapp_etl.fielding_oaa_cell --feed infield",
+    "db:migrate:remote": "cross-env MLBAPP_DOTENV=.env.remote bash scripts/run-flyway-remote.sh migrate",
+    "db:repair:remote": "cross-env MLBAPP_DOTENV=.env.remote bash scripts/run-flyway-remote.sh repair",
+    "etl:install": "python -m pip install -e \"./etl[dev]\"",
+    "etl:fg": "cross-env PYTHONPATH=etl python -m mlbapp_etl.fg",
+    "etl:chadwick": "cross-env PYTHONPATH=etl python -m mlbapp_etl.chadwick",
+    "etl:hall-of-fame": "cross-env PYTHONPATH=etl python -m mlbapp_etl.hall_of_fame",
+    "etl:statcast": "cross-env PYTHONPATH=etl python -m mlbapp_etl.statcast",
+    "etl:sprint": "cross-env PYTHONPATH=etl python -m mlbapp_etl.sprint_running",
+    "etl:fielding-oaa": "cross-env PYTHONPATH=etl python -m mlbapp_etl.fielding_oaa_cell",
+    "etl:fielding-oaa-if": "cross-env PYTHONPATH=etl python -m mlbapp_etl.fielding_oaa_cell --feed infield",
     "etl:season-refresh": "bash scripts/run-season-etl-refresh.sh",
+    "db:bootstrap-remote": "bash scripts/bootstrap-remote-db.sh",
     "chat:checklist": "bash scripts/validate-chat-checklist.sh",
     "test:shared": "pnpm --filter @mlbapp/shared test"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "cross-env": "^10.1.0"
   }
 }

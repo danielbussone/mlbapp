@@ -2,4 +2,5 @@
 mlbapp-chadwick-etl = mlbapp_etl.chadwick:main
 mlbapp-fg-etl = mlbapp_etl.fg:main
 mlbapp-fielding-oaa-etl = mlbapp_etl.fielding_oaa_cell:main
+mlbapp-hall-of-fame-etl = mlbapp_etl.hall_of_fame:main
 mlbapp-sprint-etl = mlbapp_etl.sprint_running:main

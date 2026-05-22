@@ -1,7 +1,7 @@
 """Load Chadwick Bureau **full** player register into ``dim_player`` and
 ``player_external_identifier``.
 
-Uses the official `register` GitHub **zip** (same archive as pybaseball’s
+Uses the official `register` GitHub **zip** (same archive as pybaseball's
 lookup helper) and concatenates every ``data/people*.csv`` shard. This keeps
 ``key_uuid`` and all crosswalk columns; ``pybaseball.chadwick_register()`` in
 current upstream builds **drops** ``key_uuid`` and filters to a major-league
@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -39,11 +40,15 @@ from typing import Any
 
 import pandas as pd
 import psycopg
-import psycopg.errors
 import requests
 
 from mlbapp_etl.columns import as_int, as_text
 from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
+
+
+def _log(msg: str) -> None:
+    ts = time.strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", file=sys.stderr, flush=True)
 
 _PEOPLE_FILE_PATTERN = re.compile(r"register[^/]+/data/people[^/]+\.csv$")
 
@@ -69,6 +74,81 @@ _MANAGED_ID_SYSTEMS = frozenset(
     }
 )
 
+# ── Batch SQL ─────────────────────────────────────────────────────────────────
+
+_CREATE_DIM_STAGE = """
+CREATE TEMP TABLE IF NOT EXISTS _chad_dim_stage (
+    key_uuid    text,
+    key_mlbam   int,
+    name_last   text NOT NULL,
+    name_first  text NOT NULL,
+    birth_date  text,
+    key_person  text
+) ON COMMIT DELETE ROWS
+"""
+
+_CREATE_EXT_STAGE = """
+CREATE TEMP TABLE IF NOT EXISTS _chad_ext_stage (
+    key_uuid   text,
+    id_system  text NOT NULL,
+    id_value   text NOT NULL
+) ON COMMIT DELETE ROWS
+"""
+
+# Null out key_mlbam already claimed by a different uuid already in dim_player.
+_MLBAM_NULLIFY_EXISTING = """
+UPDATE _chad_dim_stage s SET key_mlbam = NULL
+FROM dim_player d
+WHERE s.key_mlbam = d.key_mlbam
+  AND s.key_uuid != d.key_uuid::text
+"""
+
+# Null out key_mlbam that appears more than once within this batch.
+_MLBAM_NULLIFY_INTRA = """
+UPDATE _chad_dim_stage SET key_mlbam = NULL
+WHERE key_mlbam IN (
+    SELECT key_mlbam FROM _chad_dim_stage
+    WHERE key_mlbam IS NOT NULL
+    GROUP BY key_mlbam HAVING COUNT(*) > 1
+)
+"""
+
+_DIM_BATCH_UPSERT = """
+INSERT INTO dim_player (key_uuid, key_mlbam, name_last, name_first, birth_date)
+SELECT key_uuid::uuid, key_mlbam, name_last, name_first, birth_date::date
+FROM _chad_dim_stage
+ON CONFLICT (key_uuid) DO UPDATE SET
+    name_last  = EXCLUDED.name_last,
+    name_first = EXCLUDED.name_first,
+    birth_date = COALESCE(EXCLUDED.birth_date, dim_player.birth_date),
+    key_mlbam  = CASE
+        WHEN EXCLUDED.key_mlbam IS NOT NULL THEN EXCLUDED.key_mlbam
+        ELSE dim_player.key_mlbam
+    END,
+    updated_at = now()
+"""
+
+# Delete all managed ext-id rows for every player that appears in the ext stage.
+_EXT_DELETE_BATCH = """
+DELETE FROM player_external_identifier pei
+WHERE pei.player_id IN (
+    SELECT DISTINCT d.player_id
+    FROM dim_player d
+    WHERE d.key_uuid::text IN (SELECT DISTINCT key_uuid FROM _chad_ext_stage)
+)
+AND pei.id_system = ANY(%s)
+"""
+
+_EXT_INSERT_BATCH = """
+INSERT INTO player_external_identifier (player_id, id_system, id_value, valid_from)
+SELECT DISTINCT d.player_id, s.id_system, s.id_value, now()
+FROM _chad_ext_stage s
+JOIN dim_player d ON d.key_uuid::text = s.key_uuid
+ON CONFLICT (id_system, id_value) DO UPDATE SET
+    player_id  = EXCLUDED.player_id,
+    valid_from = now()
+"""
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -90,9 +170,12 @@ def _extract_people_frames(zip_archive: zipfile.ZipFile) -> list[pd.DataFrame]:
 
 
 def load_register_from_zip_bytes(data: bytes) -> pd.DataFrame:
+    _log("Extracting and parsing people CSV shards from zip …")
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         dfs = _extract_people_frames(zf)
-    return pd.concat(dfs, axis=0, ignore_index=True)
+    df = pd.concat(dfs, axis=0, ignore_index=True)
+    _log(f"Parsed {len(df):,} register rows from {len(dfs)} shard(s)")
+    return df
 
 
 def fetch_register_zip(
@@ -100,11 +183,28 @@ def fetch_register_zip(
     *,
     session: requests.Session | None = None,
     timeout: int = 120,
+    cache_path: Path | None = None,
+    no_cache: bool = False,
 ) -> bytes:
+    if cache_path and not no_cache and cache_path.exists():
+        age_h = (time.time() - cache_path.stat().st_mtime) / 3600
+        _log(f"Using cached zip at {cache_path} (age: {age_h:.1f}h) — pass --no-cache to re-download")
+        return cache_path.read_bytes()
+
+    _log(f"Downloading register zip from {url} …")
     sess = session or requests.Session()
     resp = sess.get(url, timeout=timeout)
     resp.raise_for_status()
-    return resp.content
+    data = resp.content
+    mb = len(data) / 1_048_576
+    _log(f"Download complete ({mb:.1f} MB)")
+
+    if cache_path:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(data)
+        _log(f"Cached zip saved to {cache_path}")
+
+    return data
 
 
 def _parse_uuid(val: Any) -> str | None:
@@ -146,6 +246,27 @@ def _clear_ambiguous_mlbam(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _external_source_values(row: pd.Series) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for col, sys_name in _ID_SYSTEM_BY_COLUMN.items():
+        if col not in row.index:
+            continue
+        raw = row.get(col)
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            continue
+        s = as_text(raw)
+        if not s or s == "":
+            continue
+        if col in ("key_mlbam", "key_fangraphs"):
+            n = as_int(raw)
+            if n is None or n <= 0:
+                continue
+            out[sys_name] = str(n)
+        else:
+            out[sys_name] = s
+    return out
+
+
 def build_dim_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """One dict per register row with canonical ``dim_player`` + external keys."""
     df = _clear_ambiguous_mlbam(df)
@@ -173,69 +294,6 @@ def build_dim_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
             }
         )
     return rows
-
-
-def _external_source_values(row: pd.Series) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for col, sys_name in _ID_SYSTEM_BY_COLUMN.items():
-        if col not in row.index:
-            continue
-        raw = row.get(col)
-        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-            continue
-        s = as_text(raw)
-        if not s or s == "":
-            continue
-        if col in ("key_mlbam", "key_fangraphs"):
-            n = as_int(raw)
-            if n is None or n <= 0:
-                continue
-            out[sys_name] = str(n)
-        else:
-            out[sys_name] = s
-    return out
-
-
-def _external_tuples(
-    player_id: int,
-    key_uuid: str,
-    key_person: str | None,
-    extras: dict[str, Any],
-) -> list[tuple[int, str, str]]:
-    """(player_id, id_system, id_value) rows to insert."""
-    pairs: list[tuple[int, str, str]] = []
-    pairs.append((player_id, "chadwick_uuid", key_uuid))
-    if key_person:
-        pairs.append((player_id, "chadwick_person", key_person))
-    for sys_name in _ID_SYSTEM_BY_COLUMN.values():
-        v = extras.get(sys_name)
-        if v:
-            pairs.append((player_id, sys_name, v))
-    return pairs
-
-
-_DIM_UPSERT = """
-INSERT INTO dim_player (key_uuid, key_mlbam, name_last, name_first, birth_date)
-VALUES (%(key_uuid)s::uuid, %(key_mlbam)s, %(name_last)s, %(name_first)s, %(birth_date)s::date)
-ON CONFLICT (key_uuid) DO UPDATE SET
-  name_last = EXCLUDED.name_last,
-  name_first = EXCLUDED.name_first,
-  birth_date = COALESCE(EXCLUDED.birth_date, dim_player.birth_date),
-  key_mlbam = CASE
-    WHEN EXCLUDED.key_mlbam IS NOT NULL THEN EXCLUDED.key_mlbam
-    ELSE dim_player.key_mlbam
-  END,
-  updated_at = now()
-RETURNING player_id
-"""
-
-_EXT_UPSERT = """
-INSERT INTO player_external_identifier (player_id, id_system, id_value, valid_from)
-VALUES (%s, %s, %s, now())
-ON CONFLICT (id_system, id_value) DO UPDATE SET
-  player_id = EXCLUDED.player_id,
-  valid_from = now()
-"""
 
 
 def _fetch_dim_uuid_mlbam(cur: Any) -> dict[str, int | None]:
@@ -279,28 +337,60 @@ def filter_chadwick_incremental(
     return selected, stats
 
 
-def _upsert_dim_player(cur: Any, rec: dict[str, Any]) -> int | None:
-    params = {
-        "key_uuid": rec["key_uuid"],
-        "key_mlbam": rec["key_mlbam"],
-        "name_last": rec["name_last"],
-        "name_first": rec["name_first"],
-        "birth_date": rec["birth_date"],
-    }
-    cur.execute("SAVEPOINT chadwick_dim_player")
-    try:
-        cur.execute(_DIM_UPSERT, params)
-    except psycopg.errors.UniqueViolation as exc:
-        cname = getattr(getattr(exc, "diag", None), "constraint_name", "") or ""
-        if "key_mlbam" not in cname.lower():
-            raise
-        cur.execute("ROLLBACK TO SAVEPOINT chadwick_dim_player")
-        cur.execute(_DIM_UPSERT, {**params, "key_mlbam": None})
-    row = cur.fetchone()
-    cur.execute("RELEASE SAVEPOINT chadwick_dim_player")
-    if not row:
-        return None
-    return int(row[0])
+def _upsert_chunk_batch(
+    conn: psycopg.Connection,
+    chunk: list[dict[str, Any]],
+    managed_systems: list[str],
+) -> tuple[int, int]:
+    """Upsert one chunk via COPY + set-based SQL. Returns (deleted_ext, inserted_ext).
+
+    Six round-trips per chunk regardless of chunk size, vs the previous approach
+    which made ~5 round-trips per row (SAVEPOINT, dim upsert, release, ext delete,
+    ext insert).
+    """
+    with conn.cursor() as cur:
+        # Stage dim rows
+        with cur.copy(
+            "COPY _chad_dim_stage"
+            " (key_uuid, key_mlbam, name_last, name_first, birth_date, key_person)"
+            " FROM STDIN"
+        ) as copy:
+            for rec in chunk:
+                copy.write_row((
+                    rec["key_uuid"],
+                    rec.get("key_mlbam"),
+                    rec["name_last"],
+                    rec["name_first"],
+                    rec.get("birth_date"),
+                    rec.get("key_person"),
+                ))
+
+        # Resolve mlbam conflicts before the upsert
+        cur.execute(_MLBAM_NULLIFY_EXISTING)
+        cur.execute(_MLBAM_NULLIFY_INTRA)
+        cur.execute(_DIM_BATCH_UPSERT)
+
+        # Stage ext-id rows (key_uuid, id_system, id_value) — player_id resolved in SQL
+        with cur.copy(
+            "COPY _chad_ext_stage (key_uuid, id_system, id_value) FROM STDIN"
+        ) as copy:
+            for rec in chunk:
+                key_uuid = rec["key_uuid"]
+                copy.write_row((key_uuid, "chadwick_uuid", key_uuid))
+                if rec.get("key_person"):
+                    copy.write_row((key_uuid, "chadwick_person", rec["key_person"]))
+                for sys_name in _ID_SYSTEM_BY_COLUMN.values():
+                    val = rec.get(sys_name)
+                    if val:
+                        copy.write_row((key_uuid, sys_name, str(val)))
+
+        cur.execute(_EXT_DELETE_BATCH, (managed_systems,))
+        deleted = cur.rowcount
+        cur.execute(_EXT_INSERT_BATCH)
+        inserted = cur.rowcount
+
+    conn.commit()  # ON COMMIT DELETE ROWS clears both staging tables
+    return deleted, inserted
 
 
 def run_chadwick_etl(
@@ -312,12 +402,18 @@ def run_chadwick_etl(
     notes: str | None,
     chunk_size: int,
     incremental: bool,
+    cache_path: Path | None = None,
+    no_cache: bool = False,
 ) -> dict[str, Any] | None:
     if register_zip_bytes is None:
-        register_zip_bytes = fetch_register_zip(register_zip_url)
+        register_zip_bytes = fetch_register_zip(
+            register_zip_url, cache_path=cache_path, no_cache=no_cache
+        )
     artifact_sha256 = hashlib.sha256(register_zip_bytes).hexdigest()
     df = load_register_from_zip_bytes(register_zip_bytes)
+    _log("Building dim_player rows …")
     dim_input = build_dim_rows(df)
+    _log(f"Built {len(dim_input):,} dim rows ({len(df) - len(dim_input):,} skipped, no valid key_uuid)")
 
     params_obj: dict[str, Any] = {
         "transport": "chadwick_register_zip",
@@ -337,10 +433,17 @@ def run_chadwick_etl(
                 file=sys.stderr,
             )
             sys.exit(1)
+        _log("Fetching existing dim_player UUIDs for incremental filter …")
         with psycopg.connect(dsn) as conn:
             with conn.cursor() as cur:
                 existing = _fetch_dim_uuid_mlbam(cur)
+        _log(f"Fetched {len(existing):,} existing dim_player rows")
         work_rows, inc_stats = filter_chadwick_incremental(dim_input, existing)
+        _log(
+            f"Incremental filter: {inc_stats['new_key_uuid_rows']:,} new, "
+            f"{inc_stats['key_mlbam_change_rows']:,} mlbam changed, "
+            f"{inc_stats['skipped_unchanged_rows']:,} skipped"
+        )
         params_obj["incremental_stats"] = inc_stats
         params_obj["upsert_row_count"] = len(work_rows)
 
@@ -363,6 +466,12 @@ def run_chadwick_etl(
     deleted_maps = 0
     inserted_maps = 0
 
+    total = len(work_rows)
+    n_chunks = max(1, -(-total // chunk_size))
+    _log(f"Writing {total:,} rows to DB in {n_chunks} chunk(s) of {chunk_size} …")
+
+    managed_systems = list(_MANAGED_ID_SYSTEMS)
+
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -378,35 +487,20 @@ def run_chadwick_etl(
                     notes,
                 ),
             )
-
-            for i in range(0, len(work_rows), chunk_size):
-                chunk = work_rows[i : i + chunk_size]
-                for rec in chunk:
-                    extras = {k: rec[k] for k in _ID_SYSTEM_BY_COLUMN.values() if k in rec}
-                    pid = _upsert_dim_player(cur, rec)
-                    if pid is None:
-                        continue
-                    tuples = _external_tuples(
-                        pid,
-                        rec["key_uuid"],
-                        rec.get("key_person"),
-                        extras,
-                    )
-                    if not tuples:
-                        continue
-                    cur.execute(
-                        """
-                        DELETE FROM player_external_identifier
-                        WHERE player_id = %s
-                          AND id_system = ANY(%s)
-                        """,
-                        (pid, list(_MANAGED_ID_SYSTEMS)),
-                    )
-                    deleted_maps += cur.rowcount
-                    cur.executemany(_EXT_UPSERT, tuples)
-                    inserted_maps += len(tuples)
-
         conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute(_CREATE_DIM_STAGE)
+            cur.execute(_CREATE_EXT_STAGE)
+        conn.commit()
+
+        for i in range(0, total, chunk_size):
+            chunk = work_rows[i : i + chunk_size]
+            chunk_num = i // chunk_size + 1
+            _log(f"  chunk {chunk_num}/{n_chunks} ({i:,}–{min(i + chunk_size, total):,})")
+            d, ins = _upsert_chunk_batch(conn, chunk, managed_systems)
+            deleted_maps += d
+            inserted_maps += ins
 
     summary = {
         "snapshot_id": str(snapshot_id),
@@ -458,13 +552,21 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument("--notes", default=None)
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Force a fresh download even if a cached zip exists.",
+    )
     ns = parser.parse_args(argv)
 
     load_repo_dotenv(_repo_root())
     dsn = os.environ.get("DATABASE_URL")
     zip_bytes: bytes | None = None
+    cache_path: Path | None = None
     if ns.register_zip_file:
         zip_bytes = Path(ns.register_zip_file).expanduser().read_bytes()
+    else:
+        cache_path = _repo_root() / ".cache" / "chadwick-register.zip"
     if not dsn and (not ns.dry_run or ns.incremental):
         print(
             "DATABASE_URL is required unless --dry-run without --incremental "
@@ -482,6 +584,8 @@ def main(argv: list[str] | None = None) -> None:
             notes=ns.notes,
             chunk_size=max(1, ns.chunk_size),
             incremental=ns.incremental,
+            cache_path=cache_path,
+            no_cache=ns.no_cache,
         )
     except requests.HTTPError as exc:
         print("Chadwick register HTTP error:", exc, file=sys.stderr)

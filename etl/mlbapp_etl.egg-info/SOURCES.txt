@@ -7,6 +7,7 @@ mlbapp_etl/fg.py
 mlbapp_etl/fg_api.py
 mlbapp_etl/fg_qualify.py
 mlbapp_etl/fielding_oaa_cell.py
+mlbapp_etl/hall_of_fame.py
 mlbapp_etl/jsonutil.py
 mlbapp_etl/runtime.py
 mlbapp_etl/sprint_running.py
@@ -24,6 +25,7 @@ tests/test_fg_api.py
 tests/test_fg_argv.py
 tests/test_fg_qualify.py
 tests/test_fielding_oaa_cell.py
+tests/test_hall_of_fame.py
 tests/test_runtime_dotenv.py
 tests/test_sprint_running.py
 tests/test_statcast.py

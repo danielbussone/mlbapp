@@ -34,9 +34,13 @@ import psycopg
 import requests
 from psycopg.types.json import Json
 
-from mlbapp_etl.columns import as_int, as_numeric, as_smallint, as_text, pick
+from mlbapp_etl.columns import as_int, as_numeric, as_smallint, as_text
 from mlbapp_etl.jsonutil import json_safe
 from mlbapp_etl.runtime import load_repo_dotenv, normalize_cli_argv
+
+
+def _log(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
 def _repo_root() -> Path:
@@ -214,8 +218,7 @@ def _fetch_batter(start: date, end: date, player_mlbam: int, *, progress: bool) 
     return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
 
-def _parse_game_date(row: pd.Series) -> date | None:
-    v = pick(row, "game_date")
+def _parse_game_date_value(v: Any) -> date | None:
     if v is None:
         return None
     if hasattr(v, "date") and callable(getattr(v, "date", None)):
@@ -234,14 +237,6 @@ def _parse_game_date(row: pd.Series) -> date | None:
         return None
 
 
-def _payload_for_row(row: pd.Series) -> dict[str, Any]:
-    d: dict[str, Any] = {}
-    for col in row.index:
-        if col in _TYPED_SAVANT_COLS:
-            continue
-        d[str(col)] = json_safe(row[col])
-    return d
-
 
 def dataframe_to_pitch_rows(df: pd.DataFrame, snapshot_id: uuid.UUID) -> list[dict[str, Any]]:
     """Map a Savant dataframe to ``statcast_pitch`` row dicts for upsert."""
@@ -249,16 +244,24 @@ def dataframe_to_pitch_rows(df: pd.DataFrame, snapshot_id: uuid.UUID) -> list[di
         return []
     df = df.copy()
     df.columns = df.columns.str.strip()
+
+    snap_str = str(snapshot_id)
+    payload_keys = [c for c in df.columns if c not in _TYPED_SAVANT_COLS]
+
+    # to_dict('records') is 10-20x faster than iterrows() for large dataframes
+    # because it avoids constructing a Series object per row.
+    records = df.to_dict("records")
+
     rows: list[dict[str, Any]] = []
     skipped = 0
-    for _, row in df.iterrows():
-        game_pk = as_int(pick(row, "game_pk"))
-        at_bat_number = as_int(pick(row, "at_bat_number"))
-        pitch_number = as_int(pick(row, "pitch_number"))
-        game_year = as_smallint(pick(row, "game_year"))
-        pitcher_mlbam = as_int(pick(row, "pitcher"))
-        batter_mlbam = as_int(pick(row, "batter"))
-        gdate = _parse_game_date(row)
+    for rec in records:
+        game_pk = as_int(rec.get("game_pk"))
+        at_bat_number = as_int(rec.get("at_bat_number"))
+        pitch_number = as_int(rec.get("pitch_number"))
+        game_year = as_smallint(rec.get("game_year"))
+        pitcher_mlbam = as_int(rec.get("pitcher"))
+        batter_mlbam = as_int(rec.get("batter"))
+        gdate = _parse_game_date_value(rec.get("game_date"))
         if game_year is None and gdate is not None:
             game_year = gdate.year
         if (
@@ -271,29 +274,29 @@ def dataframe_to_pitch_rows(df: pd.DataFrame, snapshot_id: uuid.UUID) -> list[di
         ):
             skipped += 1
             continue
-        payload = _payload_for_row(row)
+        payload = {k: json_safe(rec[k]) for k in payload_keys}
         rows.append(
             {
                 "game_pk": game_pk,
                 "at_bat_number": at_bat_number,
                 "pitch_number": pitch_number,
-                "sv_id": as_text(pick(row, "sv_id")),
+                "sv_id": as_text(rec.get("sv_id")),
                 "game_date": gdate,
                 "game_year": game_year,
                 "pitcher_mlbam": pitcher_mlbam,
                 "batter_mlbam": batter_mlbam,
-                "pitch_type": as_text(pick(row, "pitch_type")),
-                "release_speed": as_numeric(pick(row, "release_speed")),
-                "pfx_x": as_numeric(pick(row, "pfx_x")),
-                "pfx_z": as_numeric(pick(row, "pfx_z")),
-                "plate_x": as_numeric(pick(row, "plate_x")),
-                "plate_z": as_numeric(pick(row, "plate_z")),
-                "launch_speed": as_numeric(pick(row, "launch_speed")),
-                "launch_angle": as_numeric(pick(row, "launch_angle")),
-                "events": as_text(pick(row, "events")),
-                "description": as_text(pick(row, "description")),
+                "pitch_type": as_text(rec.get("pitch_type")),
+                "release_speed": as_numeric(rec.get("release_speed")),
+                "pfx_x": as_numeric(rec.get("pfx_x")),
+                "pfx_z": as_numeric(rec.get("pfx_z")),
+                "plate_x": as_numeric(rec.get("plate_x")),
+                "plate_z": as_numeric(rec.get("plate_z")),
+                "launch_speed": as_numeric(rec.get("launch_speed")),
+                "launch_angle": as_numeric(rec.get("launch_angle")),
+                "events": as_text(rec.get("events")),
+                "description": as_text(rec.get("description")),
                 "payload_jsonb": Json(payload),
-                "snapshot_id": str(snapshot_id),
+                "snapshot_id": snap_str,
             },
         )
     if skipped:
@@ -305,44 +308,95 @@ def dataframe_to_pitch_rows(df: pd.DataFrame, snapshot_id: uuid.UUID) -> list[di
 
 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Last row wins on natural key (game_year, game_pk, at_bat_number, pitch_number)."""
+    """Dedupe by natural key, then by sv_id.
+
+    Savant data occasionally has two rows with different (game_pk, at_bat_number,
+    pitch_number) tuples sharing the same sv_id. The schema has a partial unique
+    index on (game_year, sv_id) WHERE sv_id IS NOT NULL, so the second row would
+    violate it even though ON CONFLICT on the PK doesn't fire.
+    """
     keyed: dict[tuple[int, int, int, int], dict[str, Any]] = {}
     for r in rows:
         k = (int(r["game_year"]), int(r["game_pk"]), int(r["at_bat_number"]), int(r["pitch_number"]))
         keyed[k] = r
-    return list(keyed.values())
+    result: list[dict[str, Any]] = []
+    sv_id_seen: set[tuple[int, str]] = set()
+    for r in keyed.values():
+        sv_id = r.get("sv_id")
+        if sv_id is not None:
+            sv_key = (int(r["game_year"]), str(sv_id))
+            if sv_key in sv_id_seen:
+                continue
+            sv_id_seen.add(sv_key)
+        result.append(r)
+    return result
 
 
-_UPSERT_SQL = """
-INSERT INTO statcast_pitch (
-  game_pk, at_bat_number, pitch_number, sv_id, game_date, game_year,
-  pitcher_mlbam, batter_mlbam, pitch_type, release_speed, pfx_x, pfx_z,
-  plate_x, plate_z, launch_speed, launch_angle, events, description,
-  payload_jsonb, snapshot_id
-) VALUES (
-  %(game_pk)s, %(at_bat_number)s, %(pitch_number)s, %(sv_id)s, %(game_date)s, %(game_year)s,
-  %(pitcher_mlbam)s, %(batter_mlbam)s, %(pitch_type)s, %(release_speed)s, %(pfx_x)s, %(pfx_z)s,
-  %(plate_x)s, %(plate_z)s, %(launch_speed)s, %(launch_angle)s, %(events)s, %(description)s,
-  %(payload_jsonb)s::jsonb, %(snapshot_id)s::uuid
+_CREATE_STAGE = """
+CREATE TEMP TABLE IF NOT EXISTS _statcast_stage (
+    game_pk         bigint,
+    at_bat_number   int,
+    pitch_number    int,
+    sv_id           text,
+    game_date       date,
+    game_year       smallint,
+    pitcher_mlbam   int,
+    batter_mlbam    int,
+    pitch_type      text,
+    release_speed   numeric,
+    pfx_x           numeric,
+    pfx_z           numeric,
+    plate_x         numeric,
+    plate_z         numeric,
+    launch_speed    numeric,
+    launch_angle    numeric,
+    events          text,
+    description     text,
+    payload_jsonb   text,
+    snapshot_id     text
+) ON COMMIT DELETE ROWS
+"""
+
+_COPY_STAGE = (
+    "COPY _statcast_stage"
+    " (game_pk, at_bat_number, pitch_number, sv_id, game_date, game_year,"
+    "  pitcher_mlbam, batter_mlbam, pitch_type, release_speed, pfx_x, pfx_z,"
+    "  plate_x, plate_z, launch_speed, launch_angle, events, description,"
+    "  payload_jsonb, snapshot_id)"
+    " FROM STDIN"
 )
+
+_UPSERT_FROM_STAGE = """
+INSERT INTO statcast_pitch (
+    game_pk, at_bat_number, pitch_number, sv_id, game_date, game_year,
+    pitcher_mlbam, batter_mlbam, pitch_type, release_speed, pfx_x, pfx_z,
+    plate_x, plate_z, launch_speed, launch_angle, events, description,
+    payload_jsonb, snapshot_id
+)
+SELECT
+    game_pk, at_bat_number, pitch_number, sv_id, game_date, game_year,
+    pitcher_mlbam, batter_mlbam, pitch_type, release_speed, pfx_x, pfx_z,
+    plate_x, plate_z, launch_speed, launch_angle, events, description,
+    payload_jsonb::jsonb, snapshot_id::uuid
+FROM _statcast_stage
 ON CONFLICT (game_year, game_pk, at_bat_number, pitch_number) DO UPDATE SET
-  sv_id = EXCLUDED.sv_id,
-  game_date = EXCLUDED.game_date,
-  pitcher_mlbam = EXCLUDED.pitcher_mlbam,
-  batter_mlbam = EXCLUDED.batter_mlbam,
-  pitch_type = EXCLUDED.pitch_type,
-  release_speed = EXCLUDED.release_speed,
-  pfx_x = EXCLUDED.pfx_x,
-  pfx_z = EXCLUDED.pfx_z,
-  plate_x = EXCLUDED.plate_x,
-  plate_z = EXCLUDED.plate_z,
-  launch_speed = EXCLUDED.launch_speed,
-  launch_angle = EXCLUDED.launch_angle,
-  events = EXCLUDED.events,
-  description = EXCLUDED.description,
-  payload_jsonb = EXCLUDED.payload_jsonb,
-  snapshot_id = EXCLUDED.snapshot_id,
-  ingested_at = now()
+    sv_id          = EXCLUDED.sv_id,
+    game_date      = EXCLUDED.game_date,
+    pitcher_mlbam  = EXCLUDED.pitcher_mlbam,
+    batter_mlbam   = EXCLUDED.batter_mlbam,
+    pitch_type     = EXCLUDED.pitch_type,
+    release_speed  = EXCLUDED.release_speed,
+    pfx_x          = EXCLUDED.pfx_x,
+    pfx_z          = EXCLUDED.pfx_z,
+    plate_x        = EXCLUDED.plate_x,
+    plate_z        = EXCLUDED.plate_z,
+    launch_speed   = EXCLUDED.launch_speed,
+    launch_angle   = EXCLUDED.launch_angle,
+    events         = EXCLUDED.events,
+    description    = EXCLUDED.description,
+    payload_jsonb  = EXCLUDED.payload_jsonb,
+    snapshot_id    = EXCLUDED.snapshot_id,
+    ingested_at    = now()
 """
 
 
@@ -433,8 +487,10 @@ def run_statcast_etl(
         "player_mlbam": player_mlbam,
         "pybaseball_version": _pybaseball_version(),
     }
+    _log(f"Fetch complete — converting dataframe to row dicts …")
     rows = _dedupe_rows(dataframe_to_pitch_rows(df, snap_id))
     row_count = len(rows)
+    _log(f"Converted {row_count:,} rows (after dedupe)")
 
     if dry_run:
         print(
@@ -454,6 +510,7 @@ def run_statcast_etl(
     linked: dict[str, int] = {}
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
+            cur.execute(_CREATE_STAGE)
             cur.execute(
                 """
                 INSERT INTO ingest_snapshot (snapshot_id, source, params, row_count, notes)
@@ -461,12 +518,30 @@ def run_statcast_etl(
                 """,
                 (str(snap_id), source, json.dumps(params_obj), row_count, notes),
             )
-            for i in range(0, row_count, 500):
-                batch = rows[i : i + 500]
-                cur.executemany(_UPSERT_SQL, batch)
+            _log(f"COPY {row_count:,} rows to staging …")
+            with cur.copy(_COPY_STAGE) as copy:
+                for r in rows:
+                    payload = r["payload_jsonb"]
+                    payload_str = json.dumps(payload.obj) if hasattr(payload, "obj") else json.dumps(payload)
+                    copy.write_row((
+                        r["game_pk"], r["at_bat_number"], r["pitch_number"],
+                        r.get("sv_id"), r.get("game_date"), r["game_year"],
+                        r["pitcher_mlbam"], r["batter_mlbam"],
+                        r.get("pitch_type"), r.get("release_speed"),
+                        r.get("pfx_x"), r.get("pfx_z"),
+                        r.get("plate_x"), r.get("plate_z"),
+                        r.get("launch_speed"), r.get("launch_angle"),
+                        r.get("events"), r.get("description"),
+                        payload_str, r["snapshot_id"],
+                    ))
+            _log("Upserting from staging into statcast_pitch …")
+            cur.execute(_UPSERT_FROM_STAGE)
             if link_players:
+                _log("Linking players …")
                 linked = _link_players(cur, snap_id)
+        _log("Committing …")
         conn.commit()
+        _log("Done.")
 
     out: dict[str, Any] = {
         "snapshot_id": str(snap_id),

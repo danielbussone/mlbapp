@@ -644,8 +644,9 @@ def run_fg_etl(
                         notes,
                     ),
                 )
-                for _, row in bat_df.iterrows():
-                    cur.execute(_BAT_SQL, _batting_row(sid, row))
+                with conn.pipeline():
+                    for _, row in bat_df.iterrows():
+                        cur.execute(_BAT_SQL, _batting_row(sid, row))
                 out.append(("fangraphs_batting", sid))
                 if link_players:
                     linked["fangraphs_batting_external_upsert"] = (
@@ -667,8 +668,9 @@ def run_fg_etl(
                         notes,
                     ),
                 )
-                for _, row in pit_df.iterrows():
-                    cur.execute(_PIT_SQL, _pitching_row(sid, row))
+                with conn.pipeline():
+                    for _, row in pit_df.iterrows():
+                        cur.execute(_PIT_SQL, _pitching_row(sid, row))
                 out.append(("fangraphs_pitching", sid))
                 if link_players:
                     linked["fangraphs_pitching_external_upsert"] = (
@@ -690,8 +692,9 @@ def run_fg_etl(
                         notes,
                     ),
                 )
-                for _, row in fld_df.iterrows():
-                    cur.execute(_FLD_SQL, _fielding_row(sid, row))
+                with conn.pipeline():
+                    for _, row in fld_df.iterrows():
+                        cur.execute(_FLD_SQL, _fielding_row(sid, row))
                 out.append(("fangraphs_fielding", sid))
                 if link_players:
                     linked["fangraphs_fielding_external_upsert"] = (
@@ -790,8 +793,27 @@ def main(argv: list[str] | None = None) -> None:
             "(default: refresh batting/pitching MV for whichever facet(s) ran)."
         ),
     )
+    parser.add_argument(
+        "--refresh-mviews-only",
+        action="store_true",
+        help=(
+            "Skip HTTP ingest entirely — only refresh fg_*_season_mlb_consolidated and JAWS "
+            "materialized views. Useful after a bulk load that ran with "
+            "--skip-consolidated-mview-refresh."
+        ),
+    )
     parser.add_argument("--notes", default=None)
     ns = parser.parse_args(argv)
+
+    if ns.refresh_mviews_only:
+        load_repo_dotenv(_repo_root())
+        dsn = os.environ.get("DATABASE_URL")
+        if not dsn:
+            print("DATABASE_URL is required for --refresh-mviews-only.", file=sys.stderr)
+            sys.exit(1)
+        refreshed = refresh_fg_consolidated_mviews(dsn, load_batting=True, load_pitching=True)
+        print(json.dumps({"refreshed_materialized_views": refreshed}, indent=2))
+        return
 
     start_season = _DEFAULT_FG_START_SEASON if ns.start_season is None else ns.start_season
     if ns.end_season is not None:
