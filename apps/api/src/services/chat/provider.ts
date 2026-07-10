@@ -30,6 +30,8 @@ export type ProviderToolCallFunction = {
 };
 
 export type ProviderToolCall = {
+  /** Provider-assigned call id. OpenAI requires it to pair a tool result to its call; Ollama ignores it. */
+  id?: string;
   type?: string;
   function?: ProviderToolCallFunction;
 };
