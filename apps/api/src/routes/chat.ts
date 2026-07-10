@@ -3,7 +3,7 @@ import { chatRequestSchema } from '@mlbapp/shared';
 import { runWithChatQueryLog } from '../db/chatQueryLogContext.js';
 import { hasDatabaseUrl, getPool } from '../db/pool.js';
 import type { ChatStreamLogger } from '../lib/chatStreamLog.js';
-import { streamOllamaChatWithTools } from '../services/ollama.js';
+import { selectProvider, streamChatWithTools } from '../services/chat/index.js';
 
 function sseWrite(
   res: NodeJS.WritableStream & { write: (chunk: string) => boolean },
@@ -49,8 +49,9 @@ export function registerChatRoute(app: FastifyInstance) {
 
         res.writeHead(200, sseHeaders);
         const pool = getPool();
+        const provider = selectProvider();
         await runWithChatQueryLog(req.log as ChatStreamLogger, async () =>
-          streamOllamaChatWithTools(pool, message, write, req.log as ChatStreamLogger, {
+          streamChatWithTools(provider, pool, message, write, req.log as ChatStreamLogger, {
             traceId: req.id,
             active_player_id: active_player_id ?? undefined,
             active_season: active_season ?? undefined,
