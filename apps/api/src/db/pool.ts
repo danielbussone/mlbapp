@@ -1,7 +1,49 @@
+import { readFileSync } from 'node:fs';
 import pg from 'pg';
 import { getChatQueryLog } from './chatQueryLogContext.js';
 
 let pool: pg.Pool | null = null;
+
+/** Read the RDS/Aurora CA bundle from DATABASE_SSL_CA (inline PEM or a file path). */
+function readCaBundle(): string | undefined {
+  const raw = process.env.DATABASE_SSL_CA;
+  if (!raw || !raw.trim()) return undefined;
+  const v = raw.trim();
+  if (v.includes('BEGIN CERTIFICATE')) return v;
+  try {
+    return readFileSync(v, 'utf8');
+  } catch (e) {
+    throw new Error(
+      `DATABASE_SSL_CA could not be read as a file path: ${v} (${e instanceof Error ? e.message : String(e)})`
+    );
+  }
+}
+
+/**
+ * TLS config for the pool, from DATABASE_SSL. Managed Postgres (Aurora/RDS) enforces TLS, but
+ * node-postgres does not infer it from the URL reliably, so we set it explicitly.
+ * - unset | disable | off | false → no TLS (local Docker Postgres).
+ * - require | no-verify | on | true → encrypt without CA verification (simplest for Aurora in-VPC).
+ * - verify-full | verify-ca → encrypt AND verify against DATABASE_SSL_CA (the RDS CA bundle).
+ */
+export function resolvePoolSsl(): pg.PoolConfig['ssl'] {
+  const mode = (process.env.DATABASE_SSL ?? '').trim().toLowerCase();
+  if (mode === '' || mode === 'disable' || mode === 'off' || mode === 'false') return undefined;
+  if (mode === 'require' || mode === 'no-verify' || mode === 'on' || mode === 'true') {
+    return { rejectUnauthorized: false };
+  }
+  if (mode === 'verify-full' || mode === 'verify-ca') {
+    const ca = readCaBundle();
+    if (!ca) {
+      throw new Error(
+        `DATABASE_SSL=${mode} requires the RDS CA bundle: set DATABASE_SSL_CA to its file path or PEM contents ` +
+          '(download from https://truststore.pki.rds.amazonaws.com/).'
+      );
+    }
+    return { rejectUnauthorized: true, ca };
+  }
+  throw new Error(`Unknown DATABASE_SSL="${mode}" (use disable | require | verify-full).`);
+}
 
 function sqlOneLine(text: string, max: number): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, max);
@@ -123,7 +165,8 @@ export function getPool(): pg.Pool {
     throw new Error('DATABASE_URL is not set');
   }
   if (!pool) {
-    const p = new pg.Pool({ connectionString: url, max: 10 });
+    const ssl = resolvePoolSsl();
+    const p = new pg.Pool({ connectionString: url, max: 10, ...(ssl ? { ssl } : {}) });
     attachChatQueryLogger(p);
     pool = p;
   }
