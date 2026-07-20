@@ -14,6 +14,8 @@
 # Steps (default):
 #   1. FanGraphs batting + pitching + fielding for [Y,Y]
 #   2. Statcast league window for season Y (default 03-01–11-30; see statcast ETL env)
+#      With --incremental: instead pull only from the last loaded game_date (minus a
+#      few overlap days for late corrections) through today — cheap for a weekly cron.
 #   3. Refresh Statcast percentile materialized views (after pitch data)
 #   4. Savant sprint / running leaderboards for Y
 #   5. Savant directional OAA — outfield and infield for Y (--replace-season)
@@ -33,12 +35,14 @@ SKIP_SPRINT=0
 SKIP_FIELDING=0
 SKIP_PERCENTILES=0
 SKIP_FG=0
+INCREMENTAL=0
 SEASON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-chadwick) WITH_CHADWICK=1; shift ;;
     --with-hall-of-fame) WITH_HOF=1; shift ;;
+    --incremental) INCREMENTAL=1; shift ;;
     --skip-statcast) SKIP_STATCAST=1; shift ;;
     --skip-sprint) SKIP_SPRINT=1; shift ;;
     --skip-fielding) SKIP_FIELDING=1; shift ;;
@@ -101,8 +105,13 @@ else
 fi
 
 if [[ "$SKIP_STATCAST" -eq 0 ]]; then
-  log "Statcast league window (season $SEASON)"
-  pnpm etl:statcast -- --mode league --season "$SEASON" --link-players --no-progress
+  if [[ "$INCREMENTAL" -eq 1 ]]; then
+    log "Statcast incremental (from last loaded game_date through today)"
+    pnpm etl:statcast -- --mode league --incremental --link-players --no-progress
+  else
+    log "Statcast league window (season $SEASON)"
+    pnpm etl:statcast -- --mode league --season "$SEASON" --link-players --no-progress
+  fi
 else
   log "Skipping Statcast league (--skip-statcast)"
 fi

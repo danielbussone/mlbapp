@@ -14,6 +14,10 @@ league date chunks; ``0`` disables.
 
 **League chunking:** ``MLBAPP_STATCAST_CHUNK_DAYS`` (default ``1``) — days per
 ``statcast(start,end)`` call; use ``7`` for faster runs when Savant tolerates it.
+
+**Incremental:** ``--mode league --incremental`` pulls from the last loaded
+``game_date`` (minus ``MLBAPP_STATCAST_INCREMENTAL_OVERLAP_DAYS``, default ``3``)
+through today — targeted refresh for a weekly cron instead of the full season window.
 """
 
 from __future__ import annotations
@@ -95,6 +99,51 @@ def _season_window(
     if end < start:
         msg = f"season window end before start: {start} {end}"
         raise ValueError(msg)
+    return start, end
+
+
+def _default_overlap_days() -> int:
+    """Days of overlap re-scraped before the last loaded game_date on an incremental
+    pull, so Savant's late corrections to recent games are picked up. Tunable via
+    MLBAPP_STATCAST_INCREMENTAL_OVERLAP_DAYS (default 3)."""
+    raw = os.environ.get("MLBAPP_STATCAST_INCREMENTAL_OVERLAP_DAYS", "3").strip()
+    if not raw:
+        return 3
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 3
+
+
+def _max_statcast_game_date(dsn: str) -> date | None:
+    """Freshness anchor for incremental pulls: the newest game_date already loaded."""
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT max(game_date) FROM statcast_pitch")
+        row = cur.fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def _compute_incremental_window(
+    last_game_date: date | None,
+    *,
+    overlap_days: int,
+    end: date,
+    start_mmdd: str | None = None,
+    end_mmdd: str | None = None,
+) -> tuple[date, date]:
+    """Date window for an incremental league pull: from the last loaded game_date
+    (minus an overlap to re-scrape late corrections) through ``end``.
+
+    If nothing is loaded yet (``last_game_date`` is None), bootstrap only the current
+    calendar season's window start — not all of history. Pure function (no DB/clock)
+    so it is unit-testable; the DB read lives in ``_max_statcast_game_date``.
+    """
+    if last_game_date is None:
+        start, _ = _season_window(end.year, start_mmdd=start_mmdd, end_mmdd=end_mmdd)
+    else:
+        start = last_game_date - timedelta(days=max(0, overlap_days))
+    if start > end:
+        start = end
     return start, end
 
 
@@ -576,11 +625,29 @@ def main(argv: list[str] | None = None) -> None:
         metavar="YYYY-MM-DD",
         help="Inclusive start (use with --end-date).",
     )
+    g.add_argument(
+        "--incremental",
+        action="store_true",
+        help=(
+            "league mode only: pull from the last loaded game_date (minus an overlap) "
+            "through --end-date or today. Requires DATABASE_URL. Ideal for weekly cron."
+        ),
+    )
     parser.add_argument(
         "--end-date",
         type=str,
         metavar="YYYY-MM-DD",
-        help="Inclusive end (required with --start-date).",
+        help="Inclusive end (required with --start-date; optional with --incremental, default today).",
+    )
+    parser.add_argument(
+        "--overlap-days",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "With --incremental, days re-scraped before the last game_date to catch late "
+            "Savant corrections (default MLBAPP_STATCAST_INCREMENTAL_OVERLAP_DAYS or 3)."
+        ),
     )
     parser.add_argument(
         "--player-mlbam",
@@ -602,7 +669,23 @@ def main(argv: list[str] | None = None) -> None:
     )
     ns = parser.parse_args(argv)
 
-    if ns.season is not None:
+    if ns.mode in ("pitcher", "batter") and ns.player_mlbam is None:
+        parser.error("--player-mlbam is required for pitcher and batter modes")
+
+    load_repo_dotenv(_repo_root())
+    dsn = os.environ.get("DATABASE_URL")
+
+    if ns.incremental:
+        if ns.mode != "league":
+            parser.error("--incremental is only supported for --mode league")
+        if not dsn:
+            parser.error("--incremental requires DATABASE_URL to read the last loaded game_date")
+        end = _parse_date(ns.end_date) if ns.end_date else date.today()
+        overlap = ns.overlap_days if ns.overlap_days is not None else _default_overlap_days()
+        start, end = _compute_incremental_window(
+            _max_statcast_game_date(dsn), overlap_days=overlap, end=end
+        )
+    elif ns.season is not None:
         start, end = _season_window(ns.season, start_mmdd=None, end_mmdd=None)
     else:
         if not ns.end_date:
@@ -610,11 +693,6 @@ def main(argv: list[str] | None = None) -> None:
         start = _parse_date(ns.start_date)
         end = _parse_date(ns.end_date)
 
-    if ns.mode in ("pitcher", "batter") and ns.player_mlbam is None:
-        parser.error("--player-mlbam is required for pitcher and batter modes")
-
-    load_repo_dotenv(_repo_root())
-    dsn = os.environ.get("DATABASE_URL")
     if not dsn and not ns.dry_run:
         print(
             "DATABASE_URL is required unless --dry-run "

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
 from mlbapp_etl.statcast import (
+    _compute_incremental_window,
     _dedupe_rows,
     _season_window,
     dataframe_to_pitch_rows,
@@ -56,6 +58,37 @@ def test_season_window_defaults() -> None:
     start, end = _season_window(2024, start_mmdd=None, end_mmdd=None)
     assert start.isoformat() == "2024-03-01"
     assert end.isoformat() == "2024-11-30"
+
+
+def test_incremental_window_from_last_date_with_overlap() -> None:
+    # Pull from last game_date minus the overlap through end.
+    start, end = _compute_incremental_window(
+        date(2026, 7, 10), overlap_days=3, end=date(2026, 7, 18)
+    )
+    assert start.isoformat() == "2026-07-07"
+    assert end.isoformat() == "2026-07-18"
+
+
+def test_incremental_window_zero_overlap() -> None:
+    start, end = _compute_incremental_window(
+        date(2026, 7, 10), overlap_days=0, end=date(2026, 7, 18)
+    )
+    assert start.isoformat() == "2026-07-10"
+
+
+def test_incremental_window_bootstrap_when_empty() -> None:
+    # No data yet -> bootstrap the current calendar season start, not all history.
+    start, end = _compute_incremental_window(None, overlap_days=3, end=date(2026, 7, 18))
+    assert start.isoformat() == "2026-03-01"
+    assert end.isoformat() == "2026-07-18"
+
+
+def test_incremental_window_clamps_future_last_date() -> None:
+    # If the last loaded date is (somehow) ahead of end, don't invert the range.
+    start, end = _compute_incremental_window(
+        date(2026, 7, 20), overlap_days=0, end=date(2026, 7, 18)
+    )
+    assert start == end == date(2026, 7, 18)
 
 
 def test_skips_row_missing_game_pk() -> None:
