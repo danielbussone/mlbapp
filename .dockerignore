@@ -7,3 +7,8 @@ dist
 !.env.example
 *.md
 .idea
+# Python build/venv artifacts (keep the ETL build context clean)
+**/__pycache__
+**/*.egg-info
+.venv-etl
+.pytest_cache

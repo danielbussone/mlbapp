@@ -76,10 +76,20 @@ if [[ ! "$SEASON" =~ ^[0-9]{4}$ ]]; then
   exit 1
 fi
 
-if [[ ! -x "$ROOT/.venv-etl/bin/python" ]]; then
-  echo "Missing ETL venv. Run: pnpm etl:install" >&2
+# Python used to run the ETL modules. Defaults to `python` (works when the package is
+# installed on PATH, e.g. after `pnpm etl:install`, and inside the ETL container). Override
+# with MLBAPP_ETL_PYTHON to point at a specific interpreter/venv (no pnpm/node required).
+PY="${MLBAPP_ETL_PYTHON:-python}"
+if ! PYTHONPATH="$ROOT/etl" "$PY" -c "import mlbapp_etl" >/dev/null 2>&1; then
+  echo "ETL package not importable with '$PY'." >&2
+  echo "Run: pnpm etl:install (or pip install ./etl), or set MLBAPP_ETL_PYTHON." >&2
   exit 1
 fi
+
+# Invoke an ETL module: run_py <module> [args...]  ->  python -m mlbapp_etl.<module> [args]
+run_py() {
+  PYTHONPATH="$ROOT/etl" "$PY" -m "mlbapp_etl.$1" "${@:2}"
+}
 
 log() {
   printf '\n[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
@@ -89,17 +99,17 @@ log "Season ETL refresh starting for calendar year $SEASON"
 
 if [[ "$WITH_CHADWICK" -eq 1 ]]; then
   log "Chadwick register (incremental upsert; full zip download; not season-scoped)"
-  pnpm etl:chadwick -- --incremental
+  run_py chadwick --incremental
 fi
 
 if [[ "$WITH_HOF" -eq 1 ]]; then
   log "Hall of Fame (static table; not season-scoped)"
-  pnpm etl:hall-of-fame
+  run_py hall_of_fame
 fi
 
 if [[ "$SKIP_FG" -eq 0 ]]; then
   log "FanGraphs batting, pitching, fielding ($SEASON)"
-  pnpm etl:fg -- --start-season "$SEASON" --end-season "$SEASON" --link-players
+  run_py fg --start-season "$SEASON" --end-season "$SEASON" --link-players
 else
   log "Skipping FanGraphs (--skip-fg)"
 fi
@@ -107,10 +117,10 @@ fi
 if [[ "$SKIP_STATCAST" -eq 0 ]]; then
   if [[ "$INCREMENTAL" -eq 1 ]]; then
     log "Statcast incremental (from last loaded game_date through today)"
-    pnpm etl:statcast -- --mode league --incremental --link-players --no-progress
+    run_py statcast --mode league --incremental --link-players --no-progress
   else
     log "Statcast league window (season $SEASON)"
-    pnpm etl:statcast -- --mode league --season "$SEASON" --link-players --no-progress
+    run_py statcast --mode league --season "$SEASON" --link-players --no-progress
   fi
 else
   log "Skipping Statcast league (--skip-statcast)"
@@ -118,23 +128,23 @@ fi
 
 if [[ "$SKIP_PERCENTILES" -eq 0 ]]; then
   log "Refresh Statcast percentile materialized views"
-  pnpm db:refresh-percentiles
+  bash "$ROOT/scripts/run-refresh-statcast-percentile-mvs.sh"
 else
   log "Skipping percentile MV refresh (--skip-percentiles)"
 fi
 
 if [[ "$SKIP_SPRINT" -eq 0 ]]; then
   log "Sprint / running leaderboards ($SEASON)"
-  pnpm etl:sprint -- --season "$SEASON"
+  run_py sprint_running --season "$SEASON"
 else
   log "Skipping sprint ETL (--skip-sprint)"
 fi
 
 if [[ "$SKIP_FIELDING" -eq 0 ]]; then
   log "Savant directional OAA — outfield ($SEASON, replace season)"
-  pnpm etl:fielding-oaa -- --season "$SEASON" --replace-season
+  run_py fielding_oaa_cell --season "$SEASON" --replace-season
   log "Savant directional OAA — infield ($SEASON, replace season)"
-  pnpm etl:fielding-oaa-if -- --season "$SEASON" --replace-season
+  run_py fielding_oaa_cell --feed infield --season "$SEASON" --replace-season
 else
   log "Skipping fielding OAA (--skip-fielding)"
 fi

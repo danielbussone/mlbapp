@@ -1,0 +1,7 @@
+# Force LF for files that run inside Linux containers, regardless of the host's
+# core.autocrlf setting. A CRLF shell script fails in the container with errors like
+# "set: pipefail: invalid option name".
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.conf      text eol=lf
+*.sql       text eol=lf
