@@ -180,6 +180,39 @@ export class OpenAiProvider implements ChatProvider {
     return this.configured;
   }
 
+  /** Env var that supplies this backend's credential (used in error messages). */
+  private keyEnvVar(): string {
+    return this.name === 'bedrock' ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY';
+  }
+
+  /**
+   * Turn opaque upstream failures into actionable messages. An auth failure against a
+   * Bedrock/SigV4 gateway (e.g. "401 Signature expired: 20260711T…") means the token is
+   * invalid or lapsed — point the operator at the credential to refresh instead of leaking a
+   * raw SigV4 timestamp. Non-auth errors pass through unchanged.
+   */
+  private describeRequestError(e: unknown): Error {
+    const status = (e as { status?: number } | null)?.status;
+    const raw = e instanceof Error ? e.message : String(e);
+    const looksAuth =
+      status === 401 ||
+      status === 403 ||
+      /signature expired|invalid[ _]?api[ _]?key|unauthor|forbidden|expired token|security token/i.test(
+        raw
+      );
+    if (looksAuth) {
+      const expired = /expired/i.test(raw);
+      return new Error(
+        `${this.name} auth failed${status ? ` (${status})` : ''}: the API key/token is ${
+          expired ? 'expired' : 'invalid'
+        } — refresh ${this.keyEnvVar()} and restart the API.` +
+          (expired ? ' Bedrock/SigV4 tokens are time-limited; re-mint the credential.' : '') +
+          ` Upstream: ${raw}`
+      );
+    }
+    return e instanceof Error ? e : new Error(raw);
+  }
+
   async chatRound(
     messages: ChatMessage[],
     tools: Record<string, unknown>[] | undefined,
@@ -189,9 +222,7 @@ export class OpenAiProvider implements ChatProvider {
   ): Promise<ChatRoundResult> {
     if (!this.client) {
       throw new Error(
-        `${this.name} provider is not configured (missing API key). Set ${
-          this.name === 'bedrock' ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY'
-        }.`
+        `${this.name} provider is not configured (missing API key). Set ${this.keyEnvVar()}.`
       );
     }
 
@@ -210,13 +241,18 @@ export class OpenAiProvider implements ChatProvider {
     );
 
     const started = Date.now();
-    const resp = await this.client.chat.completions.create({
-      model: this.model,
-      // Neutral messages/tools already match the OpenAI wire shape; cast past the SDK's strict unions.
-      messages: oaiMessages as never,
-      ...(tools && tools.length > 0 ? { tools: tools as never } : {}),
-      stream: false,
-    });
+    let resp;
+    try {
+      resp = await this.client.chat.completions.create({
+        model: this.model,
+        // Neutral messages/tools already match the OpenAI wire shape; cast past the SDK's strict unions.
+        messages: oaiMessages as never,
+        ...(tools && tools.length > 0 ? { tools: tools as never } : {}),
+        stream: false,
+      });
+    } catch (e) {
+      throw this.describeRequestError(e);
+    }
 
     const choice = resp.choices?.[0];
     const { assistantMessage, hadToolCalls, content } = fromOpenAiMessage(choice?.message ?? {});
